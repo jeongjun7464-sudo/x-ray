@@ -1,0 +1,19 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment: {POSTGRES_DB: xray, POSTGRES_USER: xray, POSTGRES_PASSWORD: xray}
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck: {test: [CMD-SHELL, pg_isready -U xray], interval: 5s, timeout: 3s, retries: 10}
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://xray:xray@db:5432/xray
+      CORS_ORIGINS: http://localhost:5173,http://localhost:8080
+      DUMMY_MODE: "true"
+    ports: ["8000:8000"]
+    depends_on: {db: {condition: service_healthy}}
+  frontend:
+    build: ./frontend
+    ports: ["8080:80"]
+    depends_on: [backend]
+volumes: {postgres_data: {}}
