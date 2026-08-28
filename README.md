@@ -19,6 +19,8 @@ X-ray 영상을 업로드하면 8개 해부학적 부위를 분류하고 신뢰�
 
 Python 3.11, FastAPI, PyTorch/torchvision, pydicom, SQLAlchemy, PostgreSQL, React, TypeScript, Vite, Docker Compose, pytest, Vitest, GitHub Actions를 사용합니다. 상세 내용은 [architecture](docs/architecture.md)를 참고하세요.
 
+코드에 실제 연결된 기술과 적용 위치는 [실제 적용 기술 스택](docs/technology-stack.md)에 표로 정리했습니다. 파일 품질 분석, 구조화 JSON 로그, 요청 ID, CSP, 인메모리 속도 제한, Alembic 초기 migration, PyTorch Grad-CAM과 검토 결과 수정 UI가 포함됩니다.
+
 ## 로컬 실행
 
 ```bash
@@ -76,7 +78,7 @@ DB에는 SHA-256 해시, 형식/크기와 예측·검토 결과만 저장합니�
 
 실제 가중치와 임상 데이터가 없으므로 Accuracy/F1을 주장하지 않습니다. dummy 결과는 제품 흐름 시연용입니다. 평가 코드는 Accuracy, Macro F1, 클래스별 Precision/Recall/F1, confusion matrix와 ECE를 지원합니다.
 
-현재 제한사항은 실제 학습 가중치 부재, Grad-CAM UI/모듈 미완성, 영상 기반 laterality/view 전용 모델 부재, 인증/RBAC 및 분산 rate limit 미구현입니다. 임상 도입 전 다기관 외부·전향 검증, calibration, subgroup/failure-mode 분석, human factors, 개인정보·보안 심사와 규제 검토가 필요합니다. [validation plan](docs/validation-plan.md)
+현재 제한사항은 실제 학습 가중치 부재, Grad-CAM API/UI 오버레이 연결 전 단계, 영상 기반 laterality/view 전용 모델 부재, 인증/RBAC 및 Redis 기반 분산 rate limit 미구현입니다. Grad-CAM 계산 모듈 자체는 구현되어 실제 체크포인트에 연결할 수 있습니다. 임상 도입 전 다기관 외부·전향 검증, calibration, subgroup/failure-mode 분석, human factors, 개인정보·보안 심사와 규제 검토가 필요합니다. [validation plan](docs/validation-plan.md)
 
 화면 캡처는 합성 영상만 사용해 `docs/screenshots/`에 추가합니다. 향후 Grad-CAM, OOD/품질 모델, calibration, drift 모니터링, 인증/RBAC와 다기관 검증을 연결할 계획입니다. 포트폴리오 문구는 [portfolio description](docs/portfolio-description.md)에 있습니다.
 
