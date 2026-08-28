@@ -1,22 +1,25 @@
-import logging, time, uuid
+import base64, logging, time, uuid
+from io import BytesIO
 from datetime import datetime, timezone
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from PIL import Image
 from app.core.config import settings
 from app.core.constants import REGIONS
 from app.core.logging import configure_logging
 from app.core.rate_limit import SlidingWindowLimiter
 from app.db.database import Base, engine, get_db
-from app.db.models import Prediction
+from app.db.models import AuditEvent, Prediction
 from app.schemas import PredictionOut, ReviewUpdate, ValidationOut
 from app.services.dicom_service import metadata_orientation
 from app.services.file_validation import validate_upload
 from app.services.inference import engine as inference_engine, file_digest
 from app.services.policy import review_decision
 from app.services.quality import assess_image_quality
+from app.services.audit import record_audit
 
 configure_logging()
 logger = logging.getLogger("xray.api")
@@ -50,15 +53,21 @@ async def validate(file: UploadFile=File(...)):
     return ValidationOut(valid=True,file_format=v.format,width=v.width,height=v.height,message="사용 가능한 영상입니다.")
 def serialize(p: Prediction) -> PredictionOut:
     return PredictionOut(prediction_id=p.id, anatomical_region=p.anatomical_region, display_name=REGIONS[p.anatomical_region], confidence=p.confidence, top_predictions=p.top_predictions, laterality=p.laterality, view_position=p.view_position, review_required=p.review_required, review_reasons=p.review_reasons, model_version=p.model_version, dummy_mode=p.dummy_mode, processing_time_ms=p.processing_time_ms, created_at=p.created_at)
+
+def preview_url(pixels: object) -> str:
+    image = pixels if isinstance(pixels, Image.Image) else Image.fromarray(pixels)
+    out = BytesIO(); image.convert("L").save(out, "PNG")
+    return "data:image/png;base64," + base64.b64encode(out.getvalue()).decode("ascii")
 @app.post("/api/predictions", response_model=PredictionOut)
-async def predict(file: UploadFile=File(...), db: Session=Depends(get_db)):
+async def predict(request: Request, file: UploadFile=File(...), db: Session=Depends(get_db)):
     started=time.perf_counter(); data=await file.read(); v=validate_upload(file.filename or "",file.content_type or "",data); digest=file_digest(data)
     top=inference_engine.predict(v.pixels,digest); lat=view="UNKNOWN"; body=None
     if v.dicom is not None: lat,view,body=metadata_orientation(v.dicom)
     quality=assess_image_quality(v.pixels)
     required,reasons=review_decision(top,lat,view,body,quality.reasons)
     p=Prediction(file_hash=digest,file_format=v.format,width=v.width,height=v.height,anatomical_region=top[0]["class"],confidence=top[0]["confidence"],top_predictions=top,laterality=lat,view_position=view,review_required=required,review_reasons=reasons,model_version=settings.model_version,dummy_mode=True,processing_time_ms=max(1,int((time.perf_counter()-started)*1000)))
-    db.add(p); db.commit(); db.refresh(p); return serialize(p)
+    db.add(p); db.flush(); record_audit(db,action="PREDICTION_CREATED",target_id=p.id,request_id=request.headers.get("X-Request-ID","generated"),after={"region":p.anatomical_region,"review_required":p.review_required})
+    db.commit(); db.refresh(p); result=serialize(p); result.preview_data_url=preview_url(v.pixels); return result
 @app.get("/api/predictions", response_model=list[PredictionOut])
 def list_predictions(review_required: bool|None=None, db: Session=Depends(get_db)):
     q=select(Prediction).order_by(Prediction.created_at.desc()); q=q.where(Prediction.review_required==review_required) if review_required is not None else q
@@ -69,15 +78,22 @@ def get_prediction(prediction_id: str, db: Session=Depends(get_db)):
     if not p: raise HTTPException(404,"예측 결과를 찾을 수 없습니다.")
     return serialize(p)
 @app.patch("/api/predictions/{prediction_id}/review", response_model=PredictionOut)
-def review(prediction_id: str, body: ReviewUpdate, db: Session=Depends(get_db)):
+def review(prediction_id: str, body: ReviewUpdate, request: Request, db: Session=Depends(get_db)):
     if body.corrected_region not in REGIONS: raise HTTPException(422,"지원하지 않는 분류입니다.")
     p=db.get(Prediction,prediction_id)
     if not p: raise HTTPException(404,"예측 결과를 찾을 수 없습니다.")
-    p.corrected_region=body.corrected_region; p.review_comment=body.comment; p.reviewed_at=datetime.now(timezone.utc); p.review_required=False; db.commit(); db.refresh(p); return serialize(p)
+    before={"region":p.anatomical_region,"review_required":p.review_required}; p.corrected_region=body.corrected_region; p.review_comment=body.comment; p.reviewed_at=datetime.now(timezone.utc); p.review_required=False
+    record_audit(db,action="PREDICTION_REVIEWED",target_id=p.id,request_id=request.headers.get("X-Request-ID","generated"),before=before,after={"corrected_region":body.corrected_region,"review_required":False},reason=body.comment,actor_role="REVIEWER")
+    db.commit(); db.refresh(p); return serialize(p)
 @app.get("/api/statistics/summary")
 def stats(db: Session=Depends(get_db)):
     rows=db.execute(select(Prediction.anatomical_region,func.count(),func.avg(Prediction.confidence)).group_by(Prediction.anatomical_region)).all(); total=db.scalar(select(func.count()).select_from(Prediction)) or 0; review=db.scalar(select(func.count()).select_from(Prediction).where(Prediction.review_required==True)) or 0
     return {"total":total,"average_confidence":float(db.scalar(select(func.avg(Prediction.confidence))) or 0),"review_required_rate":review/total if total else 0,"by_region":[{"class":r[0],"count":r[1],"average_confidence":r[2]} for r in rows]}
 @app.get("/api/statistics/confusion-matrix")
 def confusion_matrix(): return {"available":False,"message":"검토된 정답 데이터가 충분할 때 계산됩니다.","labels":list(REGIONS),"matrix":[]}
+
+@app.get("/api/audit-events")
+def audit_events(limit: int=50, db: Session=Depends(get_db)):
+    limit=max(1,min(limit,200)); rows=db.scalars(select(AuditEvent).order_by(AuditEvent.created_at.desc()).limit(limit)).all()
+    return [{"event_id":x.id,"action":x.action,"target_id":x.target_id,"actor_role":x.actor_role,"request_id":x.request_id,"created_at":x.created_at} for x in rows]
 
