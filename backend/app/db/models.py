@@ -25,3 +25,17 @@ class Prediction(Base):
     corrected_region: Mapped[str | None] = mapped_column(String(32), nullable=True)
     review_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+class AuditEvent(Base):
+    __tablename__ = "audit_events"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    actor_id: Mapped[str] = mapped_column(String(64), default="anonymous")
+    actor_role: Mapped[str] = mapped_column(String(32), default="USER")
+    action: Mapped[str] = mapped_column(String(64), index=True)
+    target_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    before_value: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    after_value: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    request_id: Mapped[str] = mapped_column(String(64))
+    reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
