@@ -20,6 +20,8 @@ class PredictionOut(BaseModel):
     dummy_mode: bool
     processing_time_ms: int
     created_at: datetime | None = None
+    preview_data_url: str | None = None
+    explanation_available: bool = False
 class ReviewUpdate(BaseModel):
     corrected_region: str
     comment: str = Field(default="", max_length=1000)
@@ -29,3 +31,4 @@ class ValidationOut(BaseModel):
     width: int
     height: int
     message: str
+
