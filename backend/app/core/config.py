@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     max_image_dimension: int = 12000
     auto_classify_min_confidence: float = 0.70
     uncertainty_margin: float = 0.12
+    rate_limit_per_minute: int = 60
     cors_origins: str = "http://localhost:5173"
     dummy_mode: bool = True
     model_version: str = "dummy-v1"
@@ -19,3 +20,4 @@ def get_settings() -> Settings:
     return Settings()
 
 settings = get_settings()
+
