@@ -21,6 +21,8 @@ Python 3.11, FastAPI, PyTorch/torchvision, pydicom, SQLAlchemy, PostgreSQL, Reac
 
 코드에 실제 연결된 기술과 적용 위치는 [실제 적용 기술 스택](docs/technology-stack.md)에 표로 정리했습니다. 파일 품질 분석, 구조화 JSON 로그, 요청 ID, CSP, 인메모리 속도 제한, Alembic 초기 migration, PyTorch Grad-CAM과 검토 결과 수정 UI가 포함됩니다.
 
+Phase 1의 실제 동작 여부, 테스트와 제한사항은 [Phase 1 구현 보고서](docs/phase1-report.md)에서 확인할 수 있습니다. Orthanc, Celery, MLflow, MinIO, Prometheus 등은 아직 연결되지 않았으므로 사용 기술이 아닌 후속 후보로 구분합니다.
+
 ## 로컬 실행
 
 ```bash
