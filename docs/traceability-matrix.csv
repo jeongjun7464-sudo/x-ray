@@ -1,0 +1,9 @@
+requirement_id,risk_id,implementation,api,test_id,result
+DIF-01,R-ROUTE-01,backend/app/services/differentiators.py,POST /api/predictions,test_synthetic_dicom_and_ood,PASS
+DIF-02,R-QUALITY-01,backend/app/services/quality.py,POST /api/predictions,test_quality_flags_flat_image,PASS
+DIF-03,R-OOD-01,backend/app/services/differentiators.py,POST /api/predictions,test_synthetic_dicom_and_ood,PASS
+DIF-04,R-META-01,backend/app/services/differentiators.py,POST /api/predictions,test_synthetic_dicom_and_ood,PASS
+DIF-05,R-PRIV-01,backend/app/main.py,GET /api/active-learning/export.csv,test_review_update,PASS
+DIF-06,R-MODEL-01,backend/app/services/differentiators.py,POST /api/model-comparison,test_model_comparison_is_explicitly_mock,PASS
+DIF-08,R-TEST-01,backend/app/services/synthetic_dicom.py,GET /api/demo/synthetic-dicom,test_synthetic_dicom_and_ood,PASS
+DIF-12,R-PRIV-02,backend/app/main.py,GET /api/predictions/{id}/report.pdf,test_review_update,PASS
