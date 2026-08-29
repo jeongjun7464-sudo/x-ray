@@ -19,6 +19,15 @@ def test_review_update():
     p=client.post("/api/predictions",files={"file":("x.jpg",_jpeg(),"image/jpeg")}).json()
     r=client.patch(f'/api/predictions/{p["prediction_id"]}/review',json={"corrected_region":"CHEST","comment":"검토 완료"}); assert r.status_code==200 and not r.json()["review_required"]
     events=client.get('/api/audit-events').json(); assert any(x['action']=='PREDICTION_REVIEWED' for x in events)
+    csv_export=client.get('/api/active-learning/export.csv'); assert csv_export.status_code==200 and 'corrected_region' in csv_export.text
+    report=client.get(f'/api/predictions/{p["prediction_id"]}/report.pdf'); assert report.status_code==200 and report.content.startswith(b'%PDF')
+def test_synthetic_dicom_and_ood():
+    normal=client.get('/api/demo/synthetic-dicom?variant=normal'); assert normal.status_code==200 and normal.headers['x-synthetic-data']=='true'
+    ood=client.get('/api/demo/synthetic-dicom?variant=wrong_modality').content
+    result=client.post('/api/predictions',files={'file':('synthetic.dcm',ood,'application/dicom')}).json()
+    assert result['distribution_status']=='OUT_OF_DISTRIBUTION' and result['routing_target']=='REVIEW_QUEUE' and result['priority']=='HIGH'
+def test_model_comparison_is_explicitly_mock():
+    r=client.post('/api/model-comparison',files={'file':('x.png',png_bytes(),'image/png')}); assert r.status_code==200
+    assert len(r.json()['comparison'])==4 and all(x['mock_mode'] for x in r.json()['comparison'])
 def _jpeg():
     b=BytesIO(); Image.new("RGB",(64,64),"white").save(b,"JPEG"); return b.getvalue()
-
