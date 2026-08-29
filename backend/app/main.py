@@ -1,9 +1,9 @@
-import base64, logging, time, uuid
+import base64, csv, logging, time, uuid
 from io import BytesIO
 from datetime import datetime, timezone
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from PIL import Image
@@ -20,6 +20,8 @@ from app.services.inference import engine as inference_engine, file_digest
 from app.services.policy import review_decision
 from app.services.quality import assess_image_quality
 from app.services.audit import record_audit
+from app.services.differentiators import assess_extended, mock_model_comparison
+from app.services.synthetic_dicom import generate_synthetic_dicom
 
 configure_logging()
 logger = logging.getLogger("xray.api")
@@ -64,10 +66,14 @@ async def predict(request: Request, file: UploadFile=File(...), db: Session=Depe
     top=inference_engine.predict(v.pixels,digest); lat=view="UNKNOWN"; body=None
     if v.dicom is not None: lat,view,body=metadata_orientation(v.dicom)
     quality=assess_image_quality(v.pixels)
-    required,reasons=review_decision(top,lat,view,body,quality.reasons)
+    extended=assess_extended(v.pixels,top,v.dicom,quality)
+    policy_quality=tuple(set(quality.reasons)|set(extended.quality_reasons)|set(extended.metadata_warnings)|({"OUT_OF_DISTRIBUTION"} if extended.distribution_status!="IN_DISTRIBUTION" else set()))
+    required,reasons=review_decision(top,lat,view,body,policy_quality)
     p=Prediction(file_hash=digest,file_format=v.format,width=v.width,height=v.height,anatomical_region=top[0]["class"],confidence=top[0]["confidence"],top_predictions=top,laterality=lat,view_position=view,review_required=required,review_reasons=reasons,model_version=settings.model_version,dummy_mode=True,processing_time_ms=max(1,int((time.perf_counter()-started)*1000)))
     db.add(p); db.flush(); record_audit(db,action="PREDICTION_CREATED",target_id=p.id,request_id=request.headers.get("X-Request-ID","generated"),after={"region":p.anatomical_region,"review_required":p.review_required})
-    db.commit(); db.refresh(p); result=serialize(p); result.preview_data_url=preview_url(v.pixels); return result
+    db.commit(); db.refresh(p); result=serialize(p); result.preview_data_url=preview_url(v.pixels)
+    result.quality_status=extended.quality_status;result.quality_score=extended.quality_score;result.quality_reasons=list(extended.quality_reasons);result.distribution_status=extended.distribution_status;result.metadata_status=extended.metadata_status;result.metadata_warnings=list(extended.metadata_warnings);result.routing_target=extended.routing_target;result.priority=extended.priority
+    return result
 @app.get("/api/predictions", response_model=list[PredictionOut])
 def list_predictions(review_required: bool|None=None, db: Session=Depends(get_db)):
     q=select(Prediction).order_by(Prediction.created_at.desc()); q=q.where(Prediction.review_required==review_required) if review_required is not None else q
@@ -97,3 +103,40 @@ def audit_events(limit: int=50, db: Session=Depends(get_db)):
     limit=max(1,min(limit,200)); rows=db.scalars(select(AuditEvent).order_by(AuditEvent.created_at.desc()).limit(limit)).all()
     return [{"event_id":x.id,"action":x.action,"target_id":x.target_id,"actor_role":x.actor_role,"request_id":x.request_id,"created_at":x.created_at} for x in rows]
 
+@app.get("/api/worklist")
+def worklist(reason: str|None=None, priority: str|None=None, db: Session=Depends(get_db)):
+    rows=db.scalars(select(Prediction).where(Prediction.review_required==True).order_by(Prediction.created_at)).all();out=[]
+    for p in rows:
+        reasons=p.review_reasons or []; high=any(x in reasons for x in ("OUT_OF_DISTRIBUTION","BLUR_OR_EMPTY","METADATA_AI_CONFLICT","METADATA_CONFLICT")); item_priority="HIGH" if high else "MEDIUM"
+        if reason and reason not in reasons: continue
+        if priority and priority.upper()!=item_priority: continue
+        out.append({"prediction":serialize(p),"priority":item_priority,"reasons":reasons})
+    return out
+
+@app.get("/api/active-learning/export.csv")
+def active_learning_export(db: Session=Depends(get_db)):
+    rows=db.scalars(select(Prediction).where(Prediction.corrected_region.is_not(None))).all();text=__import__('io').StringIO(newline='');w=csv.writer(text);w.writerow(["anonymous_prediction_id","predicted_region","corrected_region","confidence","review_reasons","model_version","retraining_candidate"])
+    for p in rows:w.writerow([p.id,p.anatomical_region,p.corrected_region,p.confidence,"|".join(p.review_reasons or []),p.model_version,"true"])
+    data=('\ufeff'+text.getvalue()).encode('utf-8');return Response(data,media_type="text/csv; charset=utf-8",headers={"Content-Disposition":"attachment; filename=active-learning.csv"})
+
+@app.get("/api/demo/synthetic-dicom")
+def synthetic_dicom(variant: str="normal"):
+    allowed={"normal","monochrome1","monochrome2","phi","no_pixel","corrupt","wrong_modality","metadata_conflict","large"}
+    if variant not in allowed: raise HTTPException(422,"지원하지 않는 합성 DICOM 유형입니다.")
+    data=generate_synthetic_dicom(variant);return Response(data,media_type="application/dicom",headers={"Content-Disposition":f"attachment; filename=synthetic-{variant}.dcm","X-Synthetic-Data":"true"})
+
+@app.post("/api/model-comparison")
+async def model_comparison(file: UploadFile=File(...)):
+    data=await file.read();v=validate_upload(file.filename or "",file.content_type or "",data);digest=file_digest(data);top=inference_engine.predict(v.pixels,digest);return {"comparison":mock_model_comparison(digest,top),"disclaimer":"모든 비교 결과는 모의 모델이며 질환 진단 결과가 아닙니다."}
+
+def _simple_pdf(lines: list[str]) -> bytes:
+    safe=[x.encode("latin-1","replace").decode("latin-1") for x in lines];stream="BT /F1 11 Tf 50 790 Td "+" ".join(f"({x.replace('(','[').replace(')',']')}) Tj 0 -18 Td" for x in safe)+" ET";objects=["1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj","2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj","3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj","4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj",f"5 0 obj << /Length {len(stream)} >> stream\n{stream}\nendstream endobj"];pdf="%PDF-1.4\n";offsets=[0]
+    for o in objects:offsets.append(len(pdf.encode()));pdf+=o+"\n"
+    xref=len(pdf.encode());pdf+=f"xref\n0 {len(objects)+1}\n0000000000 65535 f \n"+"".join(f"{x:010d} 00000 n \n" for x in offsets[1:])+f"trailer << /Size {len(objects)+1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF";return pdf.encode("latin-1")
+
+@app.get("/api/predictions/{prediction_id}/report.pdf")
+def prediction_report(prediction_id: str,db: Session=Depends(get_db)):
+    p=db.get(Prediction,prediction_id)
+    if not p: raise HTTPException(404,"예측 결과를 찾을 수 없습니다.")
+    lines=["X-Ray Anatomical Region Classification Report",f"Anonymous analysis ID: {p.id}",f"Region: {p.anatomical_region}",f"Confidence: {p.confidence:.4f}",f"Laterality / View: {p.laterality} / {p.view_position}",f"Model: {p.model_version}",f"Processing: {p.processing_time_ms} ms",f"Review reasons: {', '.join(p.review_reasons or [])}",f"Corrected region: {p.corrected_region or 'Not reviewed'}","Research and education only. Not a medical diagnosis."]
+    return Response(_simple_pdf(lines),media_type="application/pdf",headers={"Content-Disposition":f"attachment; filename={p.id}.pdf"})

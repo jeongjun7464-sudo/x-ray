@@ -22,6 +22,14 @@ class PredictionOut(BaseModel):
     created_at: datetime | None = None
     preview_data_url: str | None = None
     explanation_available: bool = False
+    quality_status: str | None = None
+    quality_score: float | None = None
+    quality_reasons: list[str] = []
+    distribution_status: str | None = None
+    metadata_status: str | None = None
+    metadata_warnings: list[str] = []
+    routing_target: str | None = None
+    priority: str | None = None
 class ReviewUpdate(BaseModel):
     corrected_region: str
     comment: str = Field(default="", max_length=1000)
@@ -31,4 +39,3 @@ class ValidationOut(BaseModel):
     width: int
     height: int
     message: str
-
