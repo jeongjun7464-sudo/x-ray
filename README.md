@@ -12,6 +12,9 @@ X-ray 영상을 업로드하면 8개 해부학적 부위를 분류하고 신뢰�
 - 불확실성·방향 미상·메타데이터 충돌 기반 human review
 - 예측 이력/수정/통계 API 및 한국어 반응형 React UI
 - SQLite 개발 fallback, PostgreSQL Docker 구성
+- 품질·OOD·DICOM 메타데이터 교차검증과 안전한 분석 라우팅
+- 검토 수정 데이터의 익명 능동학습 CSV, 합성 DICOM 데모, 익명 PDF 보고서
+- 모의 모델 비교 API와 우선순위 기반 검토 워크리스트
 
 ## 아키텍처와 기술 스택
 
@@ -83,4 +86,3 @@ DB에는 SHA-256 해시, 형식/크기와 예측·검토 결과만 저장합니�
 현재 제한사항은 실제 학습 가중치 부재, Grad-CAM API/UI 오버레이 연결 전 단계, 영상 기반 laterality/view 전용 모델 부재, 인증/RBAC 및 Redis 기반 분산 rate limit 미구현입니다. Grad-CAM 계산 모듈 자체는 구현되어 실제 체크포인트에 연결할 수 있습니다. 임상 도입 전 다기관 외부·전향 검증, calibration, subgroup/failure-mode 분석, human factors, 개인정보·보안 심사와 규제 검토가 필요합니다. [validation plan](docs/validation-plan.md)
 
 화면 캡처는 합성 영상만 사용해 `docs/screenshots/`에 추가합니다. 향후 Grad-CAM, OOD/품질 모델, calibration, drift 모니터링, 인증/RBAC와 다기관 검증을 연결할 계획입니다. 포트폴리오 문구는 [portfolio description](docs/portfolio-description.md)에 있습니다.
-
