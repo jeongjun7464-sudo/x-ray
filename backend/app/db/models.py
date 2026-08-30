@@ -104,3 +104,79 @@ class IntegrationEvent(Base):
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+class PipelineRun(Base):
+    __tablename__ = "pipeline_runs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    input_hash: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="RUNNING")
+    final_route: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    stages: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+class LabelTask(Base):
+    __tablename__ = "label_tasks"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    image_hash: Mapped[str] = mapped_column(String(64), index=True)
+    assignee: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="NOT_REVIEWED")
+    first_review: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    second_review: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    final_label: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    history: Mapped[list] = mapped_column(JSON, default=list)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+class LineageEvent(Base):
+    __tablename__ = "lineage_events"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    asset_hash: Mapped[str] = mapped_column(String(64), index=True)
+    stage: Mapped[str] = mapped_column(String(64))
+    input_hash: Mapped[str] = mapped_column(String(64))
+    output_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    code_version: Mapped[str] = mapped_column(String(64))
+    config_version: Mapped[str] = mapped_column(String(64))
+    success: Mapped[bool] = mapped_column(Boolean)
+    error_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+class FeatureFlag(Base):
+    __tablename__ = "feature_flags"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    updated_by: Mapped[str] = mapped_column(String(64), default="system")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+class Notification(Base):
+    __tablename__ = "notifications"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    event_type: Mapped[str] = mapped_column(String(64), index=True)
+    message: Mapped[str] = mapped_column(String(500))
+    severity: Mapped[str] = mapped_column(String(16), default="INFO")
+    read: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+class Defect(Base):
+    __tablename__ = "defects"
+    id: Mapped[str] = mapped_column(String(24), primary_key=True)
+    title: Mapped[str] = mapped_column(String(200))
+    severity: Mapped[str] = mapped_column(String(16))
+    reproduction_steps: Mapped[str] = mapped_column(Text)
+    expected_result: Mapped[str] = mapped_column(Text)
+    actual_result: Mapped[str] = mapped_column(Text)
+    affected_version: Mapped[str] = mapped_column(String(64))
+    assignee: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="OPEN")
+    fixed_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    regression_test: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    capa_id: Mapped[str | None] = mapped_column(String(24), nullable=True)
+
+class Capa(Base):
+    __tablename__ = "capas"
+    id: Mapped[str] = mapped_column(String(24), primary_key=True)
+    defect_id: Mapped[str] = mapped_column(String(24), index=True)
+    root_cause: Mapped[str] = mapped_column(Text)
+    corrective_action: Mapped[str] = mapped_column(Text)
+    preventive_action: Mapped[str] = mapped_column(Text)
+    effectiveness_check: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="ANALYSIS")
