@@ -39,3 +39,68 @@ class AuditEvent(Base):
     reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
+class Study(Base):
+    __tablename__ = "studies"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    anonymous_accession: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    study_uid_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    study_date: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    region: Mapped[str] = mapped_column(String(32), default="UNKNOWN")
+    protocol_status: Mapped[str] = mapped_column(String(32), default="UNKNOWN_PROTOCOL")
+    views: Mapped[list] = mapped_column(JSON, default=list)
+    tags: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+class StudyInstance(Base):
+    __tablename__ = "study_instances"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    study_id: Mapped[str] = mapped_column(String(36), index=True)
+    series_uid_hash: Mapped[str] = mapped_column(String(64), index=True)
+    sop_uid_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    series_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    instance_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    view_position: Mapped[str] = mapped_column(String(16), default="UNKNOWN")
+    laterality: Mapped[str] = mapped_column(String(16), default="UNKNOWN")
+    prediction_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+
+class ProtocolDefinition(Base):
+    __tablename__ = "protocol_definitions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    region: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    required_views: Mapped[list] = mapped_column(JSON, default=list)
+    optional_views: Mapped[list] = mapped_column(JSON, default=list)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    version: Mapped[str] = mapped_column(String(32), default="1.0")
+
+class CodeMapping(Base):
+    __tablename__ = "code_mappings"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    internal_code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    korean_name: Mapped[str] = mapped_column(String(64))
+    english_name: Mapped[str] = mapped_column(String(64))
+    snomed_ct: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    radlex: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    dicom_body_part: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    version: Mapped[str] = mapped_column(String(32), default="1.0")
+
+class RoutingRule(Base):
+    __tablename__ = "routing_rules"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name: Mapped[str] = mapped_column(String(100))
+    priority: Mapped[int] = mapped_column(Integer, default=100, index=True)
+    conditions: Mapped[dict] = mapped_column(JSON, default=dict)
+    destination: Mapped[str] = mapped_column(String(64))
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    version: Mapped[str] = mapped_column(String(32), default="1.0")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+class IntegrationEvent(Base):
+    __tablename__ = "integration_events"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    event_type: Mapped[str] = mapped_column(String(64), index=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(32), default="PENDING")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
