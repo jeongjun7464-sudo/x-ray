@@ -12,7 +12,7 @@ from app.core.constants import REGIONS
 from app.core.logging import configure_logging
 from app.core.rate_limit import SlidingWindowLimiter
 from app.db.database import Base, engine, get_db
-from app.db.models import AuditEvent, CodeMapping, IntegrationEvent, Prediction, ProtocolDefinition, RoutingRule, Study, StudyInstance
+from app.db.models import AuditEvent, Capa, CodeMapping, Defect, FeatureFlag, IntegrationEvent, LabelTask, LineageEvent, Notification, PipelineRun, Prediction, ProtocolDefinition, RoutingRule, Study, StudyInstance
 from app.schemas import CodeMappingIn, PredictionOut, ProtocolIn, ReviewUpdate, RoutingRuleIn, StudyTagsIn, ValidationOut
 from app.services.dicom_service import metadata_orientation
 from app.services.file_validation import validate_upload
@@ -23,6 +23,7 @@ from app.services.audit import record_audit
 from app.services.differentiators import assess_extended, mock_model_comparison
 from app.services.synthetic_dicom import generate_synthetic_dicom
 from app.services.institution import apply_rules, dicom_group_metadata, experimental_sr, fhir_bundle, generated_tags, inspect_zip, protocol_check, uncertainty, webhook_signature
+from app.services.advanced_ai import detection_interface, landmark_interface, preprocessing_comparison, reproducibility_manifest, run_multistage, stress_test
 
 configure_logging()
 logger = logging.getLogger("xray.api")
@@ -37,6 +38,8 @@ def startup():
         defaults={"CHEST":(["PA","AP"],["LATERAL"]),"KNEE":(["AP","LATERAL"],[]),"HAND_WRIST":(["PA","OBLIQUE","LATERAL"],[]),"ANKLE":(["AP","MORTISE","LATERAL"],[]),"CERVICAL_SPINE":(["AP","LATERAL"],[])}
         for region,(required,optional) in defaults.items():
             if not db.scalar(select(ProtocolDefinition).where(ProtocolDefinition.region==region)): db.add(ProtocolDefinition(region=region,required_views=required,optional_views=optional))
+        for key in ("ENABLE_DICOM_SR","ENABLE_FHIR","ENABLE_OCR","ENABLE_DETECTION","ENABLE_ENSEMBLE","ENABLE_SHADOW_MODEL","ENABLE_DRIFT_MONITORING","ENABLE_REPORT_EXPORT"):
+            if not db.get(FeatureFlag,key): db.add(FeatureFlag(key=key,enabled=key in {"ENABLE_DICOM_SR","ENABLE_FHIR","ENABLE_REPORT_EXPORT"}))
         db.commit()
 startup()
 
@@ -83,9 +86,11 @@ async def predict(request: Request, file: UploadFile=File(...), db: Session=Depe
     policy_quality=tuple(set(quality.reasons)|set(extended.quality_reasons)|set(extended.metadata_warnings)|({"OUT_OF_DISTRIBUTION"} if extended.distribution_status!="IN_DISTRIBUTION" else set()))
     required,reasons=review_decision(top,lat,view,body,policy_quality)
     p=Prediction(file_hash=digest,file_format=v.format,width=v.width,height=v.height,anatomical_region=top[0]["class"],confidence=top[0]["confidence"],top_predictions=top,laterality=lat,view_position=view,review_required=required,review_reasons=reasons,model_version=settings.model_version,dummy_mode=True,processing_time_ms=max(1,int((time.perf_counter()-started)*1000)))
-    db.add(p); db.flush(); record_audit(db,action="PREDICTION_CREATED",target_id=p.id,request_id=request.headers.get("X-Request-ID","generated"),after={"region":p.anatomical_region,"review_required":p.review_required})
+    pipeline=run_multistage(v,top,digest,lat,view,body); run=PipelineRun(input_hash=digest,status=pipeline["status"],final_route=pipeline["final_route"],stages=pipeline["stages"])
+    db.add(p); db.add(run); db.flush(); db.add(LineageEvent(asset_hash=digest,stage="PREDICTION",input_hash=digest,output_hash=file_digest(str(top).encode()),code_version=settings.code_version,config_version="runtime-v1",success=True)); db.add(Notification(event_type="prediction.review_required" if required else "prediction.completed",message="분석 결과가 검토 대기열에 등록되었습니다." if required else "분석이 완료되었습니다.",severity="WARNING" if required else "INFO")); record_audit(db,action="PREDICTION_CREATED",target_id=p.id,request_id=request.headers.get("X-Request-ID","generated"),after={"region":p.anatomical_region,"review_required":p.review_required,"pipeline_run_id":run.id})
     db.commit(); db.refresh(p); result=serialize(p); result.preview_data_url=preview_url(v.pixels)
     result.quality_status=extended.quality_status;result.quality_score=extended.quality_score;result.quality_reasons=list(extended.quality_reasons);result.distribution_status=extended.distribution_status;result.metadata_status=extended.metadata_status;result.metadata_warnings=list(extended.metadata_warnings);result.routing_target=extended.routing_target;result.priority=extended.priority
+    result.pipeline_run_id=run.id;result.pipeline_stages=run.stages
     return result
 @app.get("/api/predictions", response_model=list[PredictionOut])
 def list_predictions(review_required: bool|None=None, db: Session=Depends(get_db)):
@@ -250,3 +255,107 @@ def admin_dashboard(x_role: str|None=Header(None), db: Session=Depends(get_db)):
 def quantify_uncertainty(probabilities: list[float]):
     if not probabilities or any(x<0 or x>1 for x in probabilities): raise HTTPException(422,"0~1 확률 배열이 필요합니다.")
     return uncertainty(probabilities)
+
+@app.get("/api/pipeline-runs/{run_id}")
+def pipeline_run(run_id: str, db: Session=Depends(get_db)):
+    row=db.get(PipelineRun,run_id)
+    if not row: raise HTTPException(404,"파이프라인 실행을 찾을 수 없습니다.")
+    return {"run_id":row.id,"input_hash":row.input_hash,"status":row.status,"final_route":row.final_route,"stages":row.stages,"created_at":row.created_at}
+
+@app.post("/api/research/preprocessing-comparison")
+async def compare_preprocessing(file: UploadFile=File(...)):
+    data=await file.read();v=validate_upload(file.filename or "",file.content_type or "",data)
+    return {"input_hash":file_digest(data),"variants":preprocessing_comparison(v.pixels),"selection_policy":"검증 세트에서만 비교하며 테스트 세트에 맞춰 선택하지 않습니다."}
+
+@app.post("/api/research/stress-test")
+async def run_stress_test(file: UploadFile=File(...)):
+    data=await file.read();v=validate_upload(file.filename or "",file.content_type or "",data);return stress_test(v.pixels)
+
+@app.get("/api/research/reproducibility")
+def reproducibility(dataset_version: str="UNSPECIFIED", seed: int=42): return reproducibility_manifest(dataset_version,seed)
+
+@app.get("/api/predictions/{prediction_id}/detection")
+def detection(prediction_id: str, db: Session=Depends(get_db)):
+    p=db.get(Prediction,prediction_id)
+    if not p: raise HTTPException(404,"예측 결과를 찾을 수 없습니다.")
+    flag=db.get(FeatureFlag,"ENABLE_DETECTION");return detection_interface(p.width,p.height,bool(flag and flag.enabled))
+
+@app.get("/api/predictions/{prediction_id}/landmarks")
+def landmarks(prediction_id: str, db: Session=Depends(get_db)):
+    p=db.get(Prediction,prediction_id)
+    if not p: raise HTTPException(404,"예측 결과를 찾을 수 없습니다.")
+    return landmark_interface(p.anatomical_region)
+
+@app.get("/api/predictions/{prediction_id}/ocr-review")
+def ocr_review(prediction_id: str, db: Session=Depends(get_db)):
+    if not db.get(Prediction,prediction_id): raise HTTPException(404,"예측 결과를 찾을 수 없습니다.")
+    flag=db.get(FeatureFlag,"ENABLE_OCR")
+    return {"status":"MODEL_NOT_CONFIGURED" if flag and flag.enabled else "DISABLED","regions":[],"mask_applied":False,"review_required":bool(flag and flag.enabled),"reason":"검증된 OCR 모델이 없어 픽셀 개인정보나 L/R 마커를 임의 판정하지 않습니다."}
+
+@app.get("/api/admin/feature-flags")
+def feature_flags(x_role: str|None=Header(None), db: Session=Depends(get_db)):
+    require_role(x_role,{"ADMIN"});return [{"key":x.key,"enabled":x.enabled,"version":x.version,"updated_by":x.updated_by,"updated_at":x.updated_at} for x in db.scalars(select(FeatureFlag).order_by(FeatureFlag.key)).all()]
+
+@app.patch("/api/admin/feature-flags/{key}")
+def update_feature_flag(key: str, body: dict, request: Request, x_role: str|None=Header(None), x_actor: str|None=Header(None), db: Session=Depends(get_db)):
+    require_role(x_role,{"ADMIN"});row=db.get(FeatureFlag,key)
+    if not row: raise HTTPException(404,"기능 플래그를 찾을 수 없습니다.")
+    before={"enabled":row.enabled,"version":row.version};row.enabled=bool(body.get("enabled"));row.version+=1;row.updated_by=x_actor or "admin";row.updated_at=datetime.now(timezone.utc);record_audit(db,action="FEATURE_FLAG_CHANGED",target_id=key,request_id=request.headers.get("X-Request-ID","generated"),before=before,after={"enabled":row.enabled,"version":row.version},actor_role="ADMIN");db.commit();return {"key":row.key,"enabled":row.enabled,"version":row.version}
+
+@app.post("/api/label-tasks")
+def create_label_task(body: dict, request: Request, x_role: str|None=Header(None), db: Session=Depends(get_db)):
+    require_role(x_role,{"ADMIN","REVIEWER"});image_hash=str(body.get("image_hash","")).lower()
+    if len(image_hash)!=64 or any(c not in "0123456789abcdef" for c in image_hash): raise HTTPException(422,"SHA-256 image_hash가 필요합니다.")
+    row=LabelTask(image_hash=image_hash,assignee=body.get("assignee"));db.add(row);db.flush();record_audit(db,action="LABEL_TASK_CREATED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),after={"image_hash":image_hash},actor_role=(x_role or "REVIEWER").upper());db.commit();return {"task_id":row.id,"status":row.status}
+
+@app.get("/api/label-tasks")
+def label_tasks(db: Session=Depends(get_db)):
+    return [{"task_id":x.id,"image_hash":x.image_hash,"assignee":x.assignee,"status":x.status,"first_review":x.first_review,"second_review":x.second_review,"final_label":x.final_label} for x in db.scalars(select(LabelTask).order_by(LabelTask.updated_at.desc())).all()]
+
+@app.post("/api/label-tasks/{task_id}/reviews")
+def submit_label_review(task_id: str, body: dict, request: Request, x_role: str|None=Header(None), x_actor: str|None=Header(None), db: Session=Depends(get_db)):
+    require_role(x_role,{"REVIEWER","ADMIN"});row=db.get(LabelTask,task_id)
+    if not row: raise HTTPException(404,"라벨 작업을 찾을 수 없습니다.")
+    reviewer=x_actor or "anonymous-reviewer";review={"reviewer":reviewer,"labels":body.get("labels",{}),"comment":body.get("comment","") ,"reviewed_at":datetime.now(timezone.utc).isoformat()}
+    if not row.first_review: row.first_review=review;row.status="FIRST_REVIEWED"
+    elif row.first_review.get("reviewer")==reviewer: raise HTTPException(409,"두 번째 검수자는 첫 번째 검수자와 달라야 합니다.")
+    elif not row.second_review: row.second_review=review;row.status="SECOND_REVIEWED" if row.first_review.get("labels")==review["labels"] else "DISAGREEMENT";row.final_label=review["labels"] if row.status=="SECOND_REVIEWED" else None
+    else: raise HTTPException(409,"독립 검수 두 건이 이미 등록되었습니다.")
+    row.history=list(row.history or [])+[review];row.updated_at=datetime.now(timezone.utc);record_audit(db,action="LABEL_REVIEW_SUBMITTED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),after={"status":row.status},actor_role=(x_role or "REVIEWER").upper());db.commit();return {"task_id":row.id,"status":row.status}
+
+@app.post("/api/label-tasks/{task_id}/adjudicate")
+def adjudicate(task_id: str, body: dict, request: Request, x_role: str|None=Header(None), db: Session=Depends(get_db)):
+    require_role(x_role,{"ADMIN"});row=db.get(LabelTask,task_id)
+    if not row: raise HTTPException(404,"라벨 작업을 찾을 수 없습니다.")
+    row.final_label=body.get("labels",{});row.status="APPROVED";row.updated_at=datetime.now(timezone.utc);record_audit(db,action="LABEL_ADJUDICATED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),after={"status":"APPROVED"},actor_role="ADMIN",reason=body.get("comment"));db.commit();return {"task_id":row.id,"status":row.status,"final_label":row.final_label}
+
+@app.get("/api/label-tasks/export.csv")
+def export_labels_csv(db: Session=Depends(get_db)):
+    rows=db.scalars(select(LabelTask).where(LabelTask.status=="APPROVED")).all();out=__import__('io').StringIO();w=csv.writer(out);w.writerow(["anonymous_image_hash","labels_json","status"])
+    for x in rows:w.writerow([x.image_hash,__import__('json').dumps(x.final_label,ensure_ascii=False),x.status])
+    return Response(('\ufeff'+out.getvalue()).encode(),media_type="text/csv",headers={"Content-Disposition":"attachment; filename=labels.csv"})
+
+@app.get("/api/lineage/{asset_hash}")
+def lineage(asset_hash: str, db: Session=Depends(get_db)):
+    return [{c.name:getattr(x,c.name) for c in LineageEvent.__table__.columns} for x in db.scalars(select(LineageEvent).where(LineageEvent.asset_hash==asset_hash).order_by(LineageEvent.created_at)).all()]
+
+@app.get("/api/notifications")
+def notifications(db: Session=Depends(get_db)):
+    return [{"id":x.id,"event_type":x.event_type,"message":x.message,"severity":x.severity,"read":x.read,"created_at":x.created_at} for x in db.scalars(select(Notification).order_by(Notification.created_at.desc()).limit(100)).all()]
+
+@app.post("/api/defects")
+def create_defect(body: dict, request: Request, x_role: str|None=Header(None), db: Session=Depends(get_db)):
+    require_role(x_role,{"ADMIN","REVIEWER"});identifier=f"BUG-XR-{(db.scalar(select(func.count()).select_from(Defect)) or 0)+1:03d}";required=("title","severity","reproduction_steps","expected_result","actual_result","affected_version")
+    if any(not body.get(x) for x in required): raise HTTPException(422,"필수 결함 정보가 누락되었습니다.")
+    row=Defect(id=identifier,**{x:body[x] for x in required},assignee=body.get("assignee"));db.add(row);record_audit(db,action="DEFECT_CREATED",target_id=identifier,request_id=request.headers.get("X-Request-ID","generated"),after={"severity":row.severity,"status":row.status},actor_role=(x_role or "REVIEWER").upper());db.commit();return {"defect_id":row.id,"status":row.status}
+
+@app.post("/api/capas")
+def create_capa(body: dict, request: Request, x_role: str|None=Header(None), db: Session=Depends(get_db)):
+    require_role(x_role,{"ADMIN"});defect=db.get(Defect,body.get("defect_id"))
+    if not defect: raise HTTPException(404,"연결할 결함을 찾을 수 없습니다.")
+    identifier=f"CAPA-XR-{(db.scalar(select(func.count()).select_from(Capa)) or 0)+1:03d}";row=Capa(id=identifier,defect_id=defect.id,root_cause=body.get("root_cause",""),corrective_action=body.get("corrective_action",""),preventive_action=body.get("preventive_action",""));db.add(row);defect.capa_id=identifier;record_audit(db,action="CAPA_CREATED",target_id=identifier,request_id=request.headers.get("X-Request-ID","generated"),after={"defect_id":defect.id},actor_role="ADMIN");db.commit();return {"capa_id":row.id,"defect_id":defect.id,"status":row.status}
+
+@app.post("/api/imaging-hub/route")
+def imaging_hub_route(body: dict):
+    modality=str(body.get("modality","")).upper();route={"DX":"XRAY_API","CR":"XRAY_API","MR":"MRI_ADAPTER","CT":"UNSUPPORTED_QUEUE","US":"UNSUPPORTED_QUEUE"}.get(modality,"UNSUPPORTED_QUEUE")
+    return {"modality":modality or "UNKNOWN","route":route,"adapter_contract":{"input_formats":["DICOM","NIFTI","PNG","JPEG"],"required_fields":["modality","study_id","series_id"],"shared_services":["deidentification","validation","job_status","audit","report_export"]},"external_call_performed":False}

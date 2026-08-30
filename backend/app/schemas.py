@@ -30,6 +30,8 @@ class PredictionOut(BaseModel):
     metadata_warnings: list[str] = []
     routing_target: str | None = None
     priority: str | None = None
+    pipeline_run_id: str | None = None
+    pipeline_stages: list[dict] = []
 class ReviewUpdate(BaseModel):
     corrected_region: str
     comment: str = Field(default="", max_length=1000)
