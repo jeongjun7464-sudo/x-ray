@@ -6,6 +6,7 @@ from pydicom.uid import ExplicitVRLittleEndian, SecondaryCaptureImageStorage, ge
 def generate_synthetic_dicom(variant="normal") -> bytes:
     meta=FileMetaDataset();meta.TransferSyntaxUID=ExplicitVRLittleEndian;meta.MediaStorageSOPClassUID=SecondaryCaptureImageStorage;meta.MediaStorageSOPInstanceUID=generate_uid()
     ds=FileDataset(None,{},file_meta=meta,preamble=b"\0"*128);ds.SOPClassUID=meta.MediaStorageSOPClassUID;ds.SOPInstanceUID=meta.MediaStorageSOPInstanceUID
+    ds.StudyInstanceUID=generate_uid();ds.SeriesInstanceUID=generate_uid();ds.AccessionNumber="SYNTHETIC-ACC";ds.StudyDate="20260830";ds.SeriesNumber=1;ds.InstanceNumber=1;ds.ViewPosition="PA";ds.Laterality="B"
     size=1024 if variant=="large" else 256;ds.Rows=size;ds.Columns=size;ds.SamplesPerPixel=1;ds.PhotometricInterpretation="MONOCHROME1" if variant=="monochrome1" else "MONOCHROME2";ds.BitsAllocated=16;ds.BitsStored=12;ds.HighBit=11;ds.PixelRepresentation=0
     ds.Modality="CT" if variant=="wrong_modality" else "DX";ds.BodyPartExamined="KNEE" if variant=="metadata_conflict" else "CHEST";ds.StudyDescription="SYNTHETIC DATA - NOT FOR CLINICAL USE";ds.PatientName="SYNTHETIC^PATIENT";ds.PatientID="SYNTHETIC-ONLY"
     if variant!="no_pixel":
