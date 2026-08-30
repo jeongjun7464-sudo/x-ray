@@ -2,6 +2,8 @@ from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
+    environment: str = "development"
+    debug: bool = False
     app_name: str = "X-Ray Anatomical Region Classification & Routing System"
     database_url: str = "sqlite:///./xray.db"
     max_upload_mb: int = 20
@@ -13,6 +15,9 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173"
     dummy_mode: bool = True
     model_version: str = "dummy-v1"
+    code_version: str = "0.3.0"
+    retention_days: int | None = None
+    log_level: str = "INFO"
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 @lru_cache
@@ -20,4 +25,3 @@ def get_settings() -> Settings:
     return Settings()
 
 settings = get_settings()
-
