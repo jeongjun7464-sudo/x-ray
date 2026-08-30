@@ -39,3 +39,31 @@ class ValidationOut(BaseModel):
     width: int
     height: int
     message: str
+
+class ProtocolIn(BaseModel):
+    region: str
+    required_views: list[str]
+    optional_views: list[str] = []
+    active: bool = True
+    version: str = "1.0"
+
+class CodeMappingIn(BaseModel):
+    internal_code: str
+    korean_name: str
+    english_name: str
+    snomed_ct: str | None = None
+    radlex: str | None = None
+    dicom_body_part: str | None = None
+    active: bool = True
+    version: str = "1.0"
+
+class RoutingRuleIn(BaseModel):
+    name: str
+    priority: int = Field(ge=1, le=10000)
+    conditions: dict
+    destination: str
+    active: bool = True
+    version: str = "1.0"
+
+class StudyTagsIn(BaseModel):
+    tags: list[dict]

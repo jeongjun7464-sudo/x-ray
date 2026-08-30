@@ -1,7 +1,7 @@
 import base64, csv, logging, time, uuid
 from io import BytesIO
 from datetime import datetime, timezone
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from sqlalchemy import func, select
@@ -12,8 +12,8 @@ from app.core.constants import REGIONS
 from app.core.logging import configure_logging
 from app.core.rate_limit import SlidingWindowLimiter
 from app.db.database import Base, engine, get_db
-from app.db.models import AuditEvent, Prediction
-from app.schemas import PredictionOut, ReviewUpdate, ValidationOut
+from app.db.models import AuditEvent, CodeMapping, IntegrationEvent, Prediction, ProtocolDefinition, RoutingRule, Study, StudyInstance
+from app.schemas import CodeMappingIn, PredictionOut, ProtocolIn, ReviewUpdate, RoutingRuleIn, StudyTagsIn, ValidationOut
 from app.services.dicom_service import metadata_orientation
 from app.services.file_validation import validate_upload
 from app.services.inference import engine as inference_engine, file_digest
@@ -22,6 +22,7 @@ from app.services.quality import assess_image_quality
 from app.services.audit import record_audit
 from app.services.differentiators import assess_extended, mock_model_comparison
 from app.services.synthetic_dicom import generate_synthetic_dicom
+from app.services.institution import apply_rules, dicom_group_metadata, experimental_sr, fhir_bundle, generated_tags, inspect_zip, protocol_check, uncertainty, webhook_signature
 
 configure_logging()
 logger = logging.getLogger("xray.api")
@@ -30,7 +31,19 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI(title=settings.app_name, version="0.1.0", description="연구·교육용 영상 분류 API이며 진단용이 아닙니다.")
 app.add_middleware(CORSMiddleware, allow_origins=[x.strip() for x in settings.cors_origins.split(",")], allow_credentials=True, allow_methods=["*"] ,allow_headers=["*"])
 @app.on_event("startup")
-def startup(): Base.metadata.create_all(bind=engine)
+def startup():
+    Base.metadata.create_all(bind=engine)
+    with next(get_db()) as db:
+        defaults={"CHEST":(["PA","AP"],["LATERAL"]),"KNEE":(["AP","LATERAL"],[]),"HAND_WRIST":(["PA","OBLIQUE","LATERAL"],[]),"ANKLE":(["AP","MORTISE","LATERAL"],[]),"CERVICAL_SPINE":(["AP","LATERAL"],[])}
+        for region,(required,optional) in defaults.items():
+            if not db.scalar(select(ProtocolDefinition).where(ProtocolDefinition.region==region)): db.add(ProtocolDefinition(region=region,required_views=required,optional_views=optional))
+        db.commit()
+startup()
+
+def require_role(role: str | None, allowed: set[str]):
+    current=(role or "USER").upper()
+    if current not in allowed: raise HTTPException(403,"이 작업을 수행할 권한이 없습니다.")
+    return current
 @app.middleware("http")
 async def security(request: Request, call_next):
     request_id=request.headers.get("X-Request-ID",uuid.uuid4().hex)
@@ -140,3 +153,100 @@ def prediction_report(prediction_id: str,db: Session=Depends(get_db)):
     if not p: raise HTTPException(404,"예측 결과를 찾을 수 없습니다.")
     lines=["X-Ray Anatomical Region Classification Report",f"Anonymous analysis ID: {p.id}",f"Region: {p.anatomical_region}",f"Confidence: {p.confidence:.4f}",f"Laterality / View: {p.laterality} / {p.view_position}",f"Model: {p.model_version}",f"Processing: {p.processing_time_ms} ms",f"Review reasons: {', '.join(p.review_reasons or [])}",f"Corrected region: {p.corrected_region or 'Not reviewed'}","Research and education only. Not a medical diagnosis."]
     return Response(_simple_pdf(lines),media_type="application/pdf",headers={"Content-Disposition":f"attachment; filename={p.id}.pdf"})
+
+# Institution integration APIs are local/synthetic by default. They never transmit patient data.
+@app.post("/api/studies/group")
+async def group_study(request: Request, files: list[UploadFile]=File(...), db: Session=Depends(get_db)):
+    if not 1 <= len(files) <= 50: raise HTTPException(422,"한 번에 1~50개 파일만 처리할 수 있습니다.")
+    grouped: dict[str,dict] = {}; duplicates=[]; failures=[]
+    for file in files:
+        try:
+            data=await file.read(); meta=dicom_group_metadata(data)
+            if db.scalar(select(StudyInstance).where(StudyInstance.sop_uid_hash==meta["sop_uid_hash"])): duplicates.append(file.filename); continue
+            group=grouped.setdefault(meta["study_uid_hash"],{"meta":meta,"instances":[]}); group["instances"].append(meta)
+        except Exception: failures.append({"file":file.filename,"reason":"INVALID_DICOM"})
+    output=[]
+    for uid,group in grouped.items():
+        meta=group["meta"]; region={"HAND":"HAND_WRIST","WRIST":"HAND_WRIST","CSPINE":"CERVICAL_SPINE"}.get(meta["body_part"],meta["body_part"])
+        protocol=db.scalar(select(ProtocolDefinition).where(ProtocolDefinition.region==region,ProtocolDefinition.active==True)); views=[x["view_position"] for x in group["instances"]]
+        checked=protocol_check(region,views,protocol.required_views if protocol else [],protocol.optional_views if protocol else [],region=="CHEST")
+        study=Study(study_uid_hash=uid,anonymous_accession=meta["anonymous_accession"],study_date=meta["study_date"],region=region,protocol_status=checked["status"],views=views,tags=generated_tags(region,views[0] if views else "UNKNOWN",meta["laterality"],"UNKNOWN",settings.model_version)); db.add(study); db.flush()
+        for item in group["instances"]: db.add(StudyInstance(study_id=study.id,series_uid_hash=item["series_uid_hash"],sop_uid_hash=item["sop_uid_hash"],series_number=item["series_number"],instance_number=item["instance_number"],view_position=item["view_position"],laterality=item["laterality"]))
+        output.append({"study_id":study.id,"region":region,"instance_count":len(group["instances"]),"views":views,"protocol":checked,"tags":study.tags})
+    record_audit(db,action="STUDIES_GROUPED",request_id=request.headers.get("X-Request-ID","generated"),after={"studies":len(output),"duplicates":len(duplicates),"failures":len(failures)}); db.commit()
+    return {"studies":output,"duplicates":duplicates,"failures":failures}
+
+@app.get("/api/studies")
+def studies(db: Session=Depends(get_db)):
+    return [{"study_id":x.id,"region":x.region,"views":x.views,"protocol_status":x.protocol_status,"tags":x.tags,"created_at":x.created_at} for x in db.scalars(select(Study).order_by(Study.created_at.desc())).all()]
+
+@app.patch("/api/studies/{study_id}/tags")
+def update_study_tags(study_id: str, body: StudyTagsIn, request: Request, x_role: str|None=Header(None), db: Session=Depends(get_db)):
+    require_role(x_role,{"ADMIN","REVIEWER"}); study=db.get(Study,study_id)
+    if not study: raise HTTPException(404,"검사를 찾을 수 없습니다.")
+    before=study.tags; study.tags=body.tags; record_audit(db,action="STUDY_TAGS_UPDATED",target_id=study.id,request_id=request.headers.get("X-Request-ID","generated"),before={"tags":before},after={"tags":body.tags},actor_role=(x_role or "REVIEWER").upper()); db.commit(); return {"study_id":study.id,"tags":study.tags}
+
+@app.get("/api/admin/protocols")
+def protocols(db: Session=Depends(get_db)):
+    return [{"id":x.id,"region":x.region,"required_views":x.required_views,"optional_views":x.optional_views,"active":x.active,"version":x.version} for x in db.scalars(select(ProtocolDefinition)).all()]
+
+@app.put("/api/admin/protocols/{region}")
+def put_protocol(region: str, body: ProtocolIn, request: Request, x_role: str|None=Header(None), db: Session=Depends(get_db)):
+    require_role(x_role,{"ADMIN"}); row=db.scalar(select(ProtocolDefinition).where(ProtocolDefinition.region==region.upper())) or ProtocolDefinition(region=region.upper()); before={"required_views":row.required_views,"optional_views":row.optional_views} if row.id else None
+    row.required_views=[x.upper() for x in body.required_views]; row.optional_views=[x.upper() for x in body.optional_views]; row.active=body.active; row.version=body.version; db.add(row); db.flush(); record_audit(db,action="PROTOCOL_UPDATED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),before=before,after={"region":row.region,"version":row.version},actor_role="ADMIN"); db.commit(); return {"id":row.id,"region":row.region,"version":row.version}
+
+@app.get("/api/admin/code-mappings")
+def code_mappings(db: Session=Depends(get_db)):
+    return [{c.name:getattr(x,c.name) for c in CodeMapping.__table__.columns} for x in db.scalars(select(CodeMapping)).all()]
+
+@app.put("/api/admin/code-mappings/{internal_code}")
+def put_code_mapping(internal_code: str, body: CodeMappingIn, request: Request, x_role: str|None=Header(None), db: Session=Depends(get_db)):
+    require_role(x_role,{"ADMIN"}); row=db.scalar(select(CodeMapping).where(CodeMapping.internal_code==internal_code.upper())) or CodeMapping(internal_code=internal_code.upper(),korean_name=body.korean_name,english_name=body.english_name)
+    before={"snomed_ct":row.snomed_ct,"radlex":row.radlex}; row.korean_name=body.korean_name;row.english_name=body.english_name;row.snomed_ct=body.snomed_ct;row.radlex=body.radlex;row.dicom_body_part=body.dicom_body_part;row.active=body.active;row.version=body.version;db.add(row);db.flush();record_audit(db,action="CODE_MAPPING_UPDATED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),before=before,after={"internal_code":row.internal_code,"version":row.version},actor_role="ADMIN");db.commit();return {"id":row.id,"internal_code":row.internal_code,"notice":"검증된 표준 코드만 관리자가 입력해야 합니다."}
+
+@app.get("/api/predictions/{prediction_id}/fhir")
+def prediction_fhir(prediction_id: str, db: Session=Depends(get_db)):
+    p=db.get(Prediction,prediction_id)
+    if not p: raise HTTPException(404,"예측 결과를 찾을 수 없습니다.")
+    return fhir_bundle(p)
+
+@app.get("/api/predictions/{prediction_id}/dicom-sr")
+def prediction_sr(prediction_id: str, db: Session=Depends(get_db)):
+    p=db.get(Prediction,prediction_id)
+    if not p: raise HTTPException(404,"예측 결과를 찾을 수 없습니다.")
+    return Response(experimental_sr(p),media_type="application/dicom",headers={"Content-Disposition":f"attachment; filename={p.id}-experimental-sr.dcm","X-Clinical-Validation":"UNVERIFIED"})
+
+@app.get("/api/admin/routing-rules")
+def routing_rules(db: Session=Depends(get_db)):
+    return [{c.name:getattr(x,c.name) for c in RoutingRule.__table__.columns} for x in db.scalars(select(RoutingRule).order_by(RoutingRule.priority)).all()]
+
+@app.post("/api/admin/routing-rules")
+def create_rule(body: RoutingRuleIn, request: Request, x_role: str|None=Header(None), db: Session=Depends(get_db)):
+    require_role(x_role,{"ADMIN"}); row=RoutingRule(**body.model_dump());db.add(row);db.flush();record_audit(db,action="ROUTING_RULE_CREATED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),after=body.model_dump(),actor_role="ADMIN");db.commit();return {"id":row.id,"version":row.version}
+
+@app.post("/api/routing/evaluate")
+def evaluate_routing(context: dict, db: Session=Depends(get_db)):
+    rules=db.scalars(select(RoutingRule).where(RoutingRule.active==True)).all(); return apply_rules(context,rules)
+
+@app.post("/api/batches/inspect")
+async def batch_inspect(file: UploadFile=File(...)):
+    if not (file.filename or "").lower().endswith(".zip"): raise HTTPException(422,"ZIP 파일만 배치 검사할 수 있습니다.")
+    files=inspect_zip(await file.read()); accepted=sum(x["accepted"] for x in files)
+    return {"total":len(files),"success":accepted,"failed":len(files)-accepted,"duplicates":0,"review_required":0,"progress":100,"estimated_seconds_remaining":0,"files":files}
+
+@app.post("/api/webhooks/events")
+def queue_webhook(event_type: str, request: Request, x_role: str|None=Header(None), db: Session=Depends(get_db)):
+    require_role(x_role,{"ADMIN"}); allowed={"prediction.completed","prediction.review_required","prediction.reviewed","quality.rejected","model.changed"}
+    if event_type not in allowed: raise HTTPException(422,"지원하지 않는 웹훅 이벤트입니다.")
+    payload={"event":event_type,"synthetic":True,"created_at":datetime.now(timezone.utc).isoformat()}; timestamp=int(time.time()); secret=settings.webhook_secret if hasattr(settings,"webhook_secret") else "development-only"
+    row=IntegrationEvent(event_type=event_type,payload=payload,status="PENDING");db.add(row);db.flush();record_audit(db,action="WEBHOOK_QUEUED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),after={"event_type":event_type},actor_role="ADMIN");db.commit();return {"event_id":row.id,"status":"PENDING","timestamp":timestamp,"signature":webhook_signature(payload,timestamp,secret),"delivery":"LOCAL_QUEUE_ONLY"}
+
+@app.get("/api/admin/dashboard")
+def admin_dashboard(x_role: str|None=Header(None), db: Session=Depends(get_db)):
+    require_role(x_role,{"ADMIN"}); total=db.scalar(select(func.count()).select_from(Prediction)) or 0; review=db.scalar(select(func.count()).select_from(Prediction).where(Prediction.review_required==True)) or 0; avg=float(db.scalar(select(func.avg(Prediction.processing_time_ms))) or 0)
+    return {"services":{"api":"UP","database":"UP","model":"DUMMY_READY","queue":"LOCAL","orthanc":"NOT_CONFIGURED","minio":"NOT_CONFIGURED"},"review_pending":review,"total_processed":total,"average_processing_ms":avg,"recent_errors":[],"deployment_version":app.version,"storage":{"status":"NOT_MEASURED","reason":"portable demo environment"}}
+
+@app.post("/api/uncertainty")
+def quantify_uncertainty(probabilities: list[float]):
+    if not probabilities or any(x<0 or x>1 for x in probabilities): raise HTTPException(422,"0~1 확률 배열이 필요합니다.")
+    return uncertainty(probabilities)
