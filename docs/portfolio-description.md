@@ -1,12 +1,14 @@
-# Portfolio description
+# AI 기반 X-ray 촬영 부위 자동 분류 및 의료영상 라우팅 시스템
 
 ## 한 줄 소개
 
-X-ray 업로드부터 내용 검증, 비식별 처리, 부위 분류, 불확실성 기반 검토 라우팅까지 연결한 연구·교육용 의료영상 AI 풀스택 시스템.
+DICOM X-ray 영상을 비식별화하고 촬영 부위·방향·영상 품질을 자동 분류한 뒤, 신뢰도 기반 검토와 분석 파이프라인 연결을 지원하는 의료영상 AI 웹서비스.
 
 ## 담당 역할과 구현
 
 FastAPI/SQLAlchemy API, pydicom 픽셀 파이프라인, 교체 가능한 추론 인터페이스, 검토 정책, React 대시보드, DenseNet 학습·평가 골격, Docker/CI와 보안 문서를 설계·구현했다. 파일명을 신뢰하지 않는 다중 검증과 PHI 비저장 구조로 업로드 위험을 줄였으며, 모델이 불확실할 때 강제 확정하지 않고 human review로 라우팅했다.
+
+실제 적용 역량은 DICOM 처리, PyTorch 분류 구조, Grad-CAM 모듈, FastAPI API, React 의료영상 UI, 환자 단위 데이터 누수 방지, 사람 검토 기반 능동학습, 요구사항·위험·테스트 추적성이다. MONAI, Orthanc/DICOMweb, MLflow와 DVC는 현재 연결되지 않았으므로 실제 사용 기술로 주장하지 않는다.
 
 ## 정량 평가
 
