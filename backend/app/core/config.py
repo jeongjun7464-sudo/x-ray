@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     code_version: str = "0.3.0"
     retention_days: int | None = None
     log_level: str = "INFO"
+    llm_provider: str = "dummy"
+    llm_model: str = "deterministic-agent-v1"
+    agent_max_steps: int = 12
+    agent_timeout_seconds: int = 15
+    agent_retention_days: int = 30
+    agent_daily_cost_limit_usd: float = 0.0
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 @lru_cache
