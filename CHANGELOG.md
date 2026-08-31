@@ -2,6 +2,18 @@
 
 형식은 Keep a Changelog를 따르며 버전은 Semantic Versioning을 사용한다.
 
+## [0.4.0] - 2026-08-31
+
+### Added
+- LangGraph 기반 의료영상 업무지원 Agent와 deterministic dummy provider
+- 7개 읽기 도구, 로컬 하이브리드 RAG, 근거 검증, 안전 필터
+- 변경 도구 제안·사용자 확인 분리, 익명 trace와 피드백
+- React Agent 패널과 6개 합성 평가 데이터셋
+
+### Known limitations
+- 외부 LLM, 의미 임베딩, vector DB, Redis/Celery, OpenTelemetry는 연결되지 않았다.
+- Agent는 질병 진단 또는 치료 조언을 제공하지 않는다.
+
 ## [0.3.0] - 2026-08-30
 
 ### Added

@@ -44,6 +44,18 @@ X-ray/DICOM 영상을 해부학적 촬영 부위로 분류하고, 영상 품질�
 - ZIP 경로 조작, 심볼릭 링크, 중첩 압축, 파일 수·크기·압축률 검사
 - 관리자 권한으로 보호되는 서비스 상태 API와 React 관리 화면
 
+### LangGraph 의료영상 업무지원 Agent
+
+- 실제 `StateGraph` 기반 의도 분류→문서 검색→허용 도구→답변→근거 검증 흐름
+- API 키 없이 실행되는 deterministic dummy Agent
+- 예측·모델·시스템 상태·감사·시험·추적성에 연결된 읽기 도구 7개
+- BM25 유사 키워드 점수와 token-vector 검색을 RRF로 결합한 로컬 하이브리드 검색
+- 문서 ID·버전·섹션·시스템 도구가 표시되는 근거 기반 답변
+- 개인정보 마스킹, prompt injection 차단, 도구 allowlist와 역할 검사
+- 변경 도구 제안과 별도 사용자 확인 API 분리
+- LangGraph 노드 실행시간·도구·검색·안전 결과 trace 및 사용자 피드백 저장
+- React 업무지원 대화 화면과 합성 Agent 평가 데이터셋
+
 ### 합성 데이터 데모
 
 - 정상 DICOM, MONOCHROME1/2, 개인정보 태그, 픽셀 없음, 손상 파일
@@ -118,6 +130,10 @@ docker compose up --build
 | `GET /api/predictions/{id}/dicom-sr` | 실험용 DICOM SR |
 | `GET /api/predictions/{id}/report.pdf` | 익명 PDF 보고서 |
 | `GET /api/admin/dashboard` | 관리자 서비스 상태 |
+| `POST /api/agent/chat` | LangGraph 업무지원 Agent 실행 |
+| `GET /api/agent/runs` | 권한 보호된 익명 Agent trace 조회 |
+| `POST /api/agent/actions` | 변경 도구 실행 전 제안 생성 |
+| `POST /api/agent/actions/{id}/confirm` | 사용자 확인 후 승인된 변경 수행 |
 
 관리 API 데모 권한은 `X-Role: ADMIN`, 태그 수정은 `ADMIN` 또는 `REVIEWER` 헤더를 사용합니다. 이는 포트폴리오용 최소 RBAC 검사이며 운영 환경에서는 OIDC/OAuth2 인증으로 교체해야 합니다.
 
@@ -138,8 +154,8 @@ npm run build
 
 현재 검증 기준:
 
-- 백엔드·ML: **22 tests passed**
-- 프론트엔드: **1 test passed**
+- 백엔드·ML: **28 tests passed**
+- 프론트엔드: **2 tests passed**
 - TypeScript 검사 및 Vite 프로덕션 빌드 통과
 
 요구사항과 위험, 구현 파일, API, 테스트 연결은 [추적성 매트릭스](docs/traceability-matrix.md)에 기록합니다.
@@ -168,7 +184,7 @@ PYTHONPATH=ml python ml/evaluate.py --manifest test.csv --checkpoint ml/runs/v1/
 - 헤더 기반 역할 검사는 데모 수준이며 완전한 사용자 인증 체계가 아닙니다.
 - Grad-CAM 계산 모듈은 있으나 dummy 모델 UI에서는 실제 히트맵을 제공하지 않습니다.
 
-Phase 20 범위는 [의료기관 연동 구현 현황](docs/phase20-implementation-status.md), Phase 21의 실제·부분·미구현 구분은 [AI 고도화 및 검증 구현 현황](docs/phase21-implementation-status.md), 최신 시험 결과는 [자동 검증 요약](docs/validation-summary.md)에서 확인할 수 있습니다. 개인정보 설계는 [Privacy & Security](docs/privacy-security.md)를 참고하세요.
+Phase 20 범위는 [의료기관 연동 구현 현황](docs/phase20-implementation-status.md), Phase 21은 [AI 고도화 및 검증 구현 현황](docs/phase21-implementation-status.md), Agent의 실제·부분·미구현 범위는 [Phase 22 Agent 현황](docs/phase22-agent-status.md), 최신 시험 결과는 [자동 검증 요약](docs/validation-summary.md)에서 확인할 수 있습니다.
 
 ## 저장소 원칙
 
