@@ -180,3 +180,41 @@ class Capa(Base):
     preventive_action: Mapped[str] = mapped_column(Text)
     effectiveness_check: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="ANALYSIS")
+
+class AgentRun(Base):
+    __tablename__ = "agent_runs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    request_id: Mapped[str] = mapped_column(String(64), index=True)
+    anonymous_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    user_role: Mapped[str] = mapped_column(String(32))
+    masked_query: Mapped[str] = mapped_column(Text)
+    selected_agent: Mapped[str] = mapped_column(String(64))
+    tool_calls: Mapped[list] = mapped_column(JSON, default=list)
+    document_ids: Mapped[list] = mapped_column(JSON, default=list)
+    answer: Mapped[str] = mapped_column(Text)
+    safety_result: Mapped[dict] = mapped_column(JSON, default=dict)
+    trace: Mapped[dict] = mapped_column(JSON, default=dict)
+    provider: Mapped[str] = mapped_column(String(32), default="dummy")
+    model: Mapped[str] = mapped_column(String(64), default="deterministic-agent-v1")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+class AgentFeedback(Base):
+    __tablename__ = "agent_feedback"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    run_id: Mapped[str] = mapped_column(String(36), index=True)
+    rating: Mapped[str] = mapped_column(String(32))
+    comment: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    agent_version: Mapped[str] = mapped_column(String(64))
+    prompt_version: Mapped[str] = mapped_column(String(32))
+    model_version: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+class AgentActionProposal(Base):
+    __tablename__ = "agent_action_proposals"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    action: Mapped[str] = mapped_column(String(64))
+    arguments: Mapped[dict] = mapped_column(JSON, default=dict)
+    requested_by: Mapped[str] = mapped_column(String(64))
+    required_role: Mapped[str] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(32), default="AWAITING_CONFIRMATION")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
