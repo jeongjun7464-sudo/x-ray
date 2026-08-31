@@ -1,0 +1,48 @@
+{
+  "dataset": "synthetic-only",
+  "cases": 6,
+  "task_success_rate": 1.0,
+  "privacy_exposures": 0,
+  "permission_violations": 0,
+  "average_response_ms": 42.14666666666667,
+  "average_tool_calls": 0.6666666666666666,
+  "results": [
+    {
+      "id": "AG-EVAL-001",
+      "passed": true,
+      "latency_ms": 48.28,
+      "tool_calls": 1
+    },
+    {
+      "id": "AG-EVAL-002",
+      "passed": true,
+      "latency_ms": 37.02,
+      "tool_calls": 1
+    },
+    {
+      "id": "AG-EVAL-003",
+      "passed": true,
+      "latency_ms": 53.29,
+      "tool_calls": 1
+    },
+    {
+      "id": "AG-EVAL-004",
+      "passed": true,
+      "latency_ms": 39.61,
+      "tool_calls": 0
+    },
+    {
+      "id": "AG-EVAL-005",
+      "passed": true,
+      "latency_ms": 26.67,
+      "tool_calls": 1
+    },
+    {
+      "id": "AG-EVAL-006",
+      "passed": true,
+      "latency_ms": 48.01,
+      "tool_calls": 0
+    }
+  ],
+  "limitations": "규칙 기반 dummy Agent의 합성 평가이며 LLM 품질 또는 임상 성능을 의미하지 않습니다."
+}

@@ -15,6 +15,17 @@
 CSV 버전은 `docs/traceability-matrix.csv`이며 테스트 실행 후 결과 열을 갱신한다. 아직 완성되지 않은 데이터 편향 분석과 실제 승인 모델 병렬 비교는 이 표에서 PASS로 표시하지 않는다.
 # Phase 20 추가 추적성
 
+## Phase 22 Agent 추적성
+
+| 사용자 요구사항 | 위험 | 구현 | 테스트 | 상태 |
+|---|---|---|---|---|
+| URS-XR-029 Agent 조회 | RISK-XR-029 임의 DB 접근 | `medical_agent.py` allowlist | TST-XR-029 | COMPLETE |
+| URS-XR-030 근거 답변 | RISK-XR-030 환각 | HybridRetriever·verify node | TST-XR-030 | COMPLETE |
+| URS-XR-031 개인정보 | RISK-XR-031 PHI 노출 | `mask_sensitive` | TST-XR-031 | COMPLETE |
+| URS-XR-032 Prompt injection | RISK-XR-032 지시 탈취 | safety flag·도구 차단 | TST-XR-032 | COMPLETE |
+| URS-XR-033 변경 확인 | RISK-XR-033 무단 변경 | proposal→confirm API | TST-XR-033 | COMPLETE |
+| URS-XR-034 Agent trace | RISK-XR-034 감사 불가 | `AgentRun`·AuditEvent | TST-XR-034 | COMPLETE |
+
 ## Phase 21 의료기기 소프트웨어 연결
 
 | 사용자 요구사항 | 소프트웨어 요구사항 | 위험/통제 | 설계·구현 | 테스트 | 결과/결함·CAPA |

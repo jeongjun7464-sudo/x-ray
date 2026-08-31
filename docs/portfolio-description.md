@@ -4,6 +4,12 @@
 
 DICOM X-ray 영상을 비식별화하고 촬영 부위·방향·영상 품질을 자동 분류한 뒤, 신뢰도 기반 검토와 분석 파이프라인 연결을 지원하는 의료영상 AI 웹서비스.
 
+## 프로젝트 확장: LangGraph 기반 의료영상 AI Workflow Agent
+
+X-ray 촬영 부위 분류 결과와 의료영상 시스템 상태를 도구 기반으로 조회하고, RAG 근거를 활용해 검토·장애 분석·검증 문서 생성을 지원하는 Human-in-the-loop AI Agent.
+
+LangGraph 상태 기반 orchestration, 도구 호출, Pydantic structured input, 로컬 하이브리드 RAG, 개인정보 최소화, 역할 기반 접근, 근거 검증, Agent 평가·trace를 FastAPI와 React에 연결했다. 현재 외부 LLM과 벡터 DB는 연결하지 않았으므로 LangChain/LangGraph 외의 미사용 후보 기술을 실제 구현으로 표현하지 않는다.
+
 ## 담당 역할과 구현
 
 FastAPI/SQLAlchemy API, pydicom 픽셀 파이프라인, 교체 가능한 추론 인터페이스, 검토 정책, React 대시보드, DenseNet 학습·평가 골격, Docker/CI와 보안 문서를 설계·구현했다. 파일명을 신뢰하지 않는 다중 검증과 PHI 비저장 구조로 업로드 위험을 줄였으며, 모델이 불확실할 때 강제 확정하지 않고 human review로 라우팅했다.
