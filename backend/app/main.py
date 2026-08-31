@@ -12,8 +12,8 @@ from app.core.constants import REGIONS
 from app.core.logging import configure_logging
 from app.core.rate_limit import SlidingWindowLimiter
 from app.db.database import Base, engine, get_db
-from app.db.models import AuditEvent, Capa, CodeMapping, Defect, FeatureFlag, IntegrationEvent, LabelTask, LineageEvent, Notification, PipelineRun, Prediction, ProtocolDefinition, RoutingRule, Study, StudyInstance
-from app.schemas import CodeMappingIn, PredictionOut, ProtocolIn, ReviewUpdate, RoutingRuleIn, StudyTagsIn, ValidationOut
+from app.db.models import AgentActionProposal, AgentFeedback, AgentRun, AuditEvent, Capa, CodeMapping, Defect, FeatureFlag, IntegrationEvent, LabelTask, LineageEvent, Notification, PipelineRun, Prediction, ProtocolDefinition, RoutingRule, Study, StudyInstance
+from app.schemas import AgentActionIn, AgentChatIn, AgentFeedbackIn, CodeMappingIn, PredictionOut, ProtocolIn, ReviewUpdate, RoutingRuleIn, StudyTagsIn, ValidationOut
 from app.services.dicom_service import metadata_orientation
 from app.services.file_validation import validate_upload
 from app.services.inference import engine as inference_engine, file_digest
@@ -24,6 +24,7 @@ from app.services.differentiators import assess_extended, mock_model_comparison
 from app.services.synthetic_dicom import generate_synthetic_dicom
 from app.services.institution import apply_rules, dicom_group_metadata, experimental_sr, fhir_bundle, generated_tags, inspect_zip, protocol_check, uncertainty, webhook_signature
 from app.services.advanced_ai import detection_interface, landmark_interface, preprocessing_comparison, reproducibility_manifest, run_multistage, stress_test
+from app.services.medical_agent import mask_sensitive, run_agent
 
 configure_logging()
 logger = logging.getLogger("xray.api")
@@ -359,3 +360,46 @@ def create_capa(body: dict, request: Request, x_role: str|None=Header(None), db:
 def imaging_hub_route(body: dict):
     modality=str(body.get("modality","")).upper();route={"DX":"XRAY_API","CR":"XRAY_API","MR":"MRI_ADAPTER","CT":"UNSUPPORTED_QUEUE","US":"UNSUPPORTED_QUEUE"}.get(modality,"UNSUPPORTED_QUEUE")
     return {"modality":modality or "UNKNOWN","route":route,"adapter_contract":{"input_formats":["DICOM","NIFTI","PNG","JPEG"],"required_fields":["modality","study_id","series_id"],"shared_services":["deidentification","validation","job_status","audit","report_export"]},"external_call_performed":False}
+
+@app.post("/api/agent/chat")
+def agent_chat(body: AgentChatIn, request: Request, x_role: str|None=Header(None), x_user_id: str|None=Header(None), db: Session=Depends(get_db)):
+    role=(x_role or "USER").upper();require_role(role,{"USER","REVIEWER","ADMIN"});user_id=file_digest((x_user_id or "anonymous").encode())[:24];request_id=request.headers.get("X-Request-ID",uuid.uuid4().hex)
+    result=run_agent(body.query,user_id,role,request_id,db);masked,phi=mask_sensitive(body.query)
+    row=AgentRun(request_id=request_id,anonymous_user_id=user_id,user_role=role,masked_query=masked if not phi else "[MESSAGE_WITH_PHI_MASKED]",selected_agent=result.get("selected_agent","Orchestrator Agent"),tool_calls=result.get("tool_calls",[]),document_ids=[x["document_id"] for x in result.get("citations",[])],answer=result["generated_answer"],safety_result={"flags":result.get("safety_flags",[]),"verification":result.get("verification_result",{})},trace={"nodes":result.get("trace",[]),"total_duration_ms":result.get("total_duration_ms"),"tool_call_count":len(result.get("tool_calls",[])),"retrieval_count":len(result.get("retrieved_documents",[])),"token_usage":{"input":0,"output":0},"estimated_cost_usd":0.0},provider=result["provider"],model=result["model"]);db.add(row);db.flush();record_audit(db,action="AGENT_RUN_COMPLETED",target_id=row.id,request_id=request_id,after={"agent":row.selected_agent,"tool_count":len(row.tool_calls),"safety_flags":result.get("safety_flags",[])},actor_role=role);db.commit()
+    return {"run_id":row.id,"answer":result["generated_answer"],"selected_agent":result.get("selected_agent"),"intent":result.get("intent"),"steps":result.get("trace",[]),"tools":[x["name"] for x in result.get("tool_calls",[])],"tool_results":result.get("tool_results",[]),"citations":result.get("citations",[]),"system_data_used":[x.get("tool") for x in result.get("tool_results",[])],"generated_at":datetime.now(timezone.utc),"confidence_level":result.get("confidence_level"),"requires_additional_confirmation":result.get("requires_human_confirmation",False),"safety_flags":result.get("safety_flags",[]),"provider":result["provider"],"diagnostic_use":False}
+
+@app.get("/api/agent/runs")
+def agent_runs(limit: int=20, x_role: str|None=Header(None), db: Session=Depends(get_db)):
+    require_role(x_role,{"ADMIN","REVIEWER"});rows=db.scalars(select(AgentRun).order_by(AgentRun.created_at.desc()).limit(max(1,min(limit,100)))).all();return [{"run_id":x.id,"request_id":x.request_id,"user_role":x.user_role,"selected_agent":x.selected_agent,"masked_query":x.masked_query,"tool_calls":x.tool_calls,"document_ids":x.document_ids,"answer":x.answer,"safety_result":x.safety_result,"trace":x.trace,"provider":x.provider,"model":x.model,"created_at":x.created_at} for x in rows]
+
+@app.post("/api/agent/runs/{run_id}/feedback")
+def agent_feedback(run_id: str, body: AgentFeedbackIn, db: Session=Depends(get_db)):
+    if not db.get(AgentRun,run_id):raise HTTPException(404,"Agent 실행 기록을 찾을 수 없습니다.")
+    allowed={"HELPFUL","NOT_HELPFUL","INSUFFICIENT_EVIDENCE","INCORRECT","HARD_TO_UNDERSTAND","PRIVACY_CONCERN","OTHER"}
+    if body.rating not in allowed:raise HTTPException(422,"지원하지 않는 피드백 유형입니다.")
+    row=AgentFeedback(run_id=run_id,rating=body.rating,comment=body.comment,agent_version="langgraph-agent-v1",prompt_version="orchestrator-v1",model_version=settings.llm_model);db.add(row);db.commit();return {"feedback_id":row.id,"saved":True}
+
+@app.post("/api/agent/actions")
+def propose_agent_action(body: AgentActionIn, x_role: str|None=Header(None), x_user_id: str|None=Header(None), db: Session=Depends(get_db)):
+    role=(x_role or "USER").upper();allowed={"assign_review":"REVIEWER","add_review_comment":"REVIEWER","create_report":"USER","register_retraining_candidate":"REVIEWER","create_defect":"REVIEWER","create_capa_draft":"ADMIN"}
+    if body.action not in allowed:raise HTTPException(403,"허용되지 않은 변경 도구입니다.")
+    hierarchy={"USER":0,"REVIEWER":1,"ADMIN":2};required=allowed[body.action]
+    if hierarchy.get(role,-1)<hierarchy[required]:raise HTTPException(403,"이 변경 도구를 제안할 권한이 없습니다.")
+    row=AgentActionProposal(action=body.action,arguments=body.arguments,requested_by=file_digest((x_user_id or "anonymous").encode())[:24],required_role=required);db.add(row);db.commit();return {"proposal_id":row.id,"status":row.status,"requires_human_confirmation":True,"action":row.action,"arguments":row.arguments}
+
+@app.post("/api/agent/actions/{proposal_id}/confirm")
+def confirm_agent_action(proposal_id: str, body: dict, request: Request, x_role: str|None=Header(None), db: Session=Depends(get_db)):
+    row=db.get(AgentActionProposal,proposal_id)
+    if not row:raise HTTPException(404,"변경 제안을 찾을 수 없습니다.")
+    if row.status!="AWAITING_CONFIRMATION":raise HTTPException(409,"이미 처리된 변경 제안입니다.")
+    hierarchy={"USER":0,"REVIEWER":1,"ADMIN":2};current=(x_role or "USER").upper()
+    if hierarchy.get(current,-1)<hierarchy.get(row.required_role,99):raise HTTPException(403,"이 변경을 확인할 권한이 없습니다.")
+    if body.get("confirmed") is not True:row.status="REJECTED";db.commit();return {"proposal_id":row.id,"status":row.status,"executed":False}
+    result={"message":"승인된 service layer를 통해 실행되었습니다."}
+    if row.action=="add_review_comment":
+        p=db.get(Prediction,row.arguments.get("prediction_id"));
+        if not p:raise HTTPException(404,"예측 결과를 찾을 수 없습니다.")
+        p.review_comment=str(row.arguments.get("comment",""))[:1000];result={"prediction_id":p.id,"comment_saved":True}
+    elif row.action=="create_report":result={"report_url":f'/api/predictions/{row.arguments.get("prediction_id")}/report.pdf'}
+    else:result={"status":"CONFIRMED_FOR_MANUAL_SERVICE","reason":"해당 변경은 추가 업무 검토가 필요하며 Agent가 자동 확정하지 않습니다."}
+    row.status="EXECUTED";record_audit(db,action="AGENT_ACTION_CONFIRMED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),after={"action":row.action,"result":result},actor_role=(x_role or row.required_role).upper());db.commit();return {"proposal_id":row.id,"status":row.status,"executed":True,"result":result}

@@ -69,3 +69,15 @@ class RoutingRuleIn(BaseModel):
 
 class StudyTagsIn(BaseModel):
     tags: list[dict]
+
+class AgentChatIn(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)
+    conversation_id: str | None = None
+
+class AgentFeedbackIn(BaseModel):
+    rating: str
+    comment: str = Field(default="", max_length=1000)
+
+class AgentActionIn(BaseModel):
+    action: str
+    arguments: dict = {}
