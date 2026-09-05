@@ -218,3 +218,80 @@ class AgentActionProposal(Base):
     required_role: Mapped[str] = mapped_column(String(32))
     status: Mapped[str] = mapped_column(String(32), default="AWAITING_CONFIRMATION")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+class UserConsent(Base):
+    __tablename__ = "user_consents"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    anonymous_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    consent_version: Mapped[str] = mapped_column(String(32), index=True)
+    accepted_items: Mapped[list] = mapped_column(JSON, default=list)
+    accepted: Mapped[bool] = mapped_column(Boolean, default=False)
+    confirmed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+class LatencyRecord(Base):
+    __tablename__ = "latency_records"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    prediction_id: Mapped[str] = mapped_column(String(36), index=True)
+    model_version: Mapped[str] = mapped_column(String(64), index=True)
+    device: Mapped[str] = mapped_column(String(16), default="CPU")
+    stages_ms: Mapped[dict] = mapped_column(JSON, default=dict)
+    total_ms: Mapped[float] = mapped_column(Float)
+    timed_out: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+class MisclassificationReport(Base):
+    __tablename__ = "misclassification_reports"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    prediction_id: Mapped[str] = mapped_column(String(36), index=True)
+    report_type: Mapped[str] = mapped_column(String(64), index=True)
+    description: Mapped[str] = mapped_column(String(1000), default="")
+    severity: Mapped[str] = mapped_column(String(16), default="MEDIUM")
+    status: Mapped[str] = mapped_column(String(32), default="REVIEW_REQUIRED")
+    linked_work_item: Mapped[str] = mapped_column(String(64))
+    capa_candidate: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+class AIRisk(Base):
+    __tablename__ = "ai_risks"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    control: Mapped[str] = mapped_column(Text)
+    verification_test: Mapped[str] = mapped_column(String(120))
+    owner: Mapped[str] = mapped_column(String(64))
+    residual_risk: Mapped[str] = mapped_column(String(16))
+
+class XrayAnalysis(Base):
+    __tablename__="xray_analyses"
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()))
+    anonymous_hash: Mapped[str]=mapped_column(String(64),index=True)
+    modality: Mapped[str]=mapped_column(String(16),default="UNKNOWN")
+    is_dicom: Mapped[bool]=mapped_column(Boolean)
+    quality: Mapped[dict]=mapped_column(JSON)
+    region_result: Mapped[dict]=mapped_column(JSON)
+    screening_status: Mapped[str]=mapped_column(String(40),index=True)
+    uncertainty: Mapped[dict]=mapped_column(JSON)
+    routing: Mapped[dict]=mapped_column(JSON)
+    model_info: Mapped[dict]=mapped_column(JSON)
+    reviewed: Mapped[bool]=mapped_column(Boolean,default=False)
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=lambda:datetime.now(timezone.utc))
+
+class FindingPredictionRecord(Base):
+    __tablename__="finding_predictions"
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()))
+    analysis_id: Mapped[str]=mapped_column(String(36),index=True)
+    code: Mapped[str]=mapped_column(String(64));display_name: Mapped[str]=mapped_column(String(100))
+    probability: Mapped[float]=mapped_column(Float);threshold: Mapped[float]=mapped_column(Float);positive: Mapped[bool]=mapped_column(Boolean)
+
+class ExplanationArtifact(Base):
+    __tablename__="explanation_artifacts"
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()))
+    analysis_id: Mapped[str]=mapped_column(String(36),index=True);artifact_type: Mapped[str]=mapped_column(String(32));storage_uri: Mapped[str|None]=mapped_column(String(500),nullable=True);available: Mapped[bool]=mapped_column(Boolean,default=False)
+
+class ClinicalReview(Base):
+    __tablename__="clinical_reviews"
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()))
+    analysis_id: Mapped[str]=mapped_column(String(36),index=True);reviewer_role: Mapped[str]=mapped_column(String(32));final_region: Mapped[str]=mapped_column(String(32));final_findings: Mapped[list]=mapped_column(JSON);comment: Mapped[str]=mapped_column(Text,default="");before_value: Mapped[dict]=mapped_column(JSON);after_value: Mapped[dict]=mapped_column(JSON);audit_event_id: Mapped[str|None]=mapped_column(String(36),nullable=True);created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=lambda:datetime.now(timezone.utc))
+
+class ModelRegistry(Base):
+    __tablename__="model_registry"
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()));model_name: Mapped[str]=mapped_column(String(100),index=True);model_version: Mapped[str]=mapped_column(String(64),index=True);checkpoint_hash: Mapped[str|None]=mapped_column(String(64),nullable=True);dummy_mode: Mapped[bool]=mapped_column(Boolean);approval_status: Mapped[str]=mapped_column(String(32),default="DEMO_ONLY")
