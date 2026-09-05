@@ -23,3 +23,12 @@ sample_data/**/*
 *.dcm
 *.dicom
 
+.venv/
+venv/
+.env
+*.db
+__pycache__/
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+.pytest-tmp/

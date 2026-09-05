@@ -1,5 +1,12 @@
 # Changelog
 
+## Phase 23 — AI Literacy & Responsible AI
+
+- Added versioned consent, transparency, model/dataset cards and Korean glossary.
+- Added measured stage latency with average and p50/p95/p99 summaries.
+- Added role-based education, quiz, issue reporting, Human-in-the-loop routing and responsible AI dashboard.
+- Added twelve-risk registry, migration and backend/frontend tests.
+
 형식은 Keep a Changelog를 따르며 버전은 Semantic Versioning을 사용한다.
 
 ## [0.4.0] - 2026-08-31

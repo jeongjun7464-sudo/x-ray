@@ -1,5 +1,25 @@
 # X-Ray Anatomical Region Classification & Routing System
 
+## X-ray AI 구축 및 분석 지원 확장
+
+새 `/api/v1/xray` 흐름은 PNG/JPG/DICOM 검증 → 메모리 내 비식별 처리 → 품질·부위 분류 → 10개 이상 의심 소견 multi-label 추론 → 불확실성/OOD → 의료진 검토 → 익명 PDF를 통합합니다. 기존 API는 그대로 유지됩니다.
+
+- 실제 모델: 승인 체크포인트, 체크포인트 해시와 검증 자료가 구성된 경우에만 사용하며 실제 Grad-CAM만 제공합니다.
+- 기본 모델: `dummy-finding-v1`은 파일 SHA-256 기반 재현용 DUMMY이며 임상 성능을 의미하지 않고 히트맵을 제공하지 않습니다.
+- PACS/Orthanc, 운영 인증, 실제 소견 체크포인트: `NOT_CONFIGURED`.
+
+주요 API는 `POST /api/v1/xray/analyze`, `POST /api/v1/xray/analyze-batch`, `GET /api/v1/xray/analyses/{id}`, `/heatmap`, `/report`, `GET /api/v1/xray/worklist`, `PATCH /api/v1/xray/analyses/{id}/review`입니다.
+
+검증 결과: 백엔드·ML **39 passed**, 프론트엔드 **4 passed**, TypeScript/Vite 빌드 성공. 현재 환경에는 Docker CLI가 없어 `docker compose config`는 실행하지 못했습니다.
+
+이 결과는 연구·교육용 분석 지원 정보이며 의료진의 진단이나 치료 결정을 대체하지 않습니다. 포트폴리오에서는 DICOM 보안, 다중 라벨 ML 계약, Human-in-the-loop, 모델 계보, 감사 로그와 책임 있는 AI를 강조합니다.
+
+> Phase 23 adds AI literacy, versioned consent, measured latency, model/dataset cards, misclassification reporting, Human-in-the-loop controls and a responsible AI risk dashboard. The bundled model remains explicitly **DEMO / DUMMY** and is not for diagnosis or treatment decisions.
+
+## 공동 개발
+
+`jeongjun7464-sudo`와 `junhaj27-jpg` 모두 동일한 코드베이스에서 브랜치와 Pull Request 방식으로 개발할 수 있습니다. 계정별 로컬 Git 작성자 설정, Collaborator/Fork 방식과 병합 전 검증 절차는 [CONTRIBUTING.md](CONTRIBUTING.md)를 따릅니다. 코드 소유권 리뷰 요청은 [.github/CODEOWNERS](.github/CODEOWNERS)에 두 계정을 등록했습니다.
+
 X-ray/DICOM 영상을 해부학적 촬영 부위로 분류하고, 영상 품질과 메타데이터를 교차검증한 뒤 적절한 분석 또는 검토 대기열로 연결하는 취업 포트폴리오용 풀스택 프로젝트입니다.
 
 > **연구·교육 및 시스템 통합 검증용입니다.** 질병을 진단하거나 촬영을 재지시하지 않으며 의료진의 판단을 대체하지 않습니다. 기본 `dummy-v1` 결과는 워크플로 시연용으로 실제 의료 AI 성능을 의미하지 않습니다.
