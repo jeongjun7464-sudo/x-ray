@@ -1,4 +1,4 @@
-import base64, csv, logging, time, uuid
+import base64, csv, logging, time, uuid, zipfile
 from io import BytesIO
 from datetime import datetime, timezone
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
@@ -12,8 +12,8 @@ from app.core.constants import REGIONS
 from app.core.logging import configure_logging
 from app.core.rate_limit import SlidingWindowLimiter
 from app.db.database import Base, engine, get_db
-from app.db.models import AgentActionProposal, AgentFeedback, AgentRun, AuditEvent, Capa, CodeMapping, Defect, FeatureFlag, IntegrationEvent, LabelTask, LineageEvent, Notification, PipelineRun, Prediction, ProtocolDefinition, RoutingRule, Study, StudyInstance
-from app.schemas import AgentActionIn, AgentChatIn, AgentFeedbackIn, CodeMappingIn, PredictionOut, ProtocolIn, ReviewUpdate, RoutingRuleIn, StudyTagsIn, ValidationOut
+from app.db.models import AIRisk, AgentActionProposal, AgentFeedback, AgentRun, AuditEvent, Capa, ClinicalReview, CodeMapping, Defect, ExplanationArtifact, FeatureFlag, FindingPredictionRecord, IntegrationEvent, LabelTask, LatencyRecord, LineageEvent, MisclassificationReport, ModelRegistry, Notification, PipelineRun, Prediction, ProtocolDefinition, RoutingRule, Study, StudyInstance, UserConsent, XrayAnalysis
+from app.schemas import AgentActionIn, AgentChatIn, AgentFeedbackIn, CodeMappingIn, ConsentIn, IntegratedReviewIn, MisclassificationReportIn, PredictionOut, ProtocolIn, ReviewUpdate, RoutingRuleIn, StudyTagsIn, ValidationOut
 from app.services.dicom_service import metadata_orientation
 from app.services.file_validation import validate_upload
 from app.services.inference import engine as inference_engine, file_digest
@@ -25,6 +25,9 @@ from app.services.synthetic_dicom import generate_synthetic_dicom
 from app.services.institution import apply_rules, dicom_group_metadata, experimental_sr, fhir_bundle, generated_tags, inspect_zip, protocol_check, uncertainty, webhook_signature
 from app.services.advanced_ai import detection_interface, landmark_interface, preprocessing_comparison, reproducibility_manifest, run_multistage, stress_test
 from app.services.medical_agent import mask_sensitive, run_agent
+from app.services.responsible_ai import CONSENT_ITEMS, CONSENT_VERSION, DATASET_CARDS, GLOSSARY, MODEL_CARDS, REPORT_TYPES, RISKS, confidence_explanation, percentile
+from xray_findings import FindingInferenceEngine
+from xray_findings.postprocess import near_threshold
 
 configure_logging()
 logger = logging.getLogger("xray.api")
@@ -32,6 +35,7 @@ limiter = SlidingWindowLimiter(settings.rate_limit_per_minute)
 Base.metadata.create_all(bind=engine)
 app = FastAPI(title=settings.app_name, version="0.1.0", description="연구·교육용 영상 분류 API이며 진단용이 아닙니다.")
 app.add_middleware(CORSMiddleware, allow_origins=[x.strip() for x in settings.cors_origins.split(",")], allow_credentials=True, allow_methods=["*"] ,allow_headers=["*"])
+finding_engine=FindingInferenceEngine()
 @app.on_event("startup")
 def startup():
     Base.metadata.create_all(bind=engine)
@@ -41,6 +45,8 @@ def startup():
             if not db.scalar(select(ProtocolDefinition).where(ProtocolDefinition.region==region)): db.add(ProtocolDefinition(region=region,required_views=required,optional_views=optional))
         for key in ("ENABLE_DICOM_SR","ENABLE_FHIR","ENABLE_OCR","ENABLE_DETECTION","ENABLE_ENSEMBLE","ENABLE_SHADOW_MODEL","ENABLE_DRIFT_MONITORING","ENABLE_REPORT_EXPORT"):
             if not db.get(FeatureFlag,key): db.add(FeatureFlag(key=key,enabled=key in {"ENABLE_DICOM_SR","ENABLE_FHIR","ENABLE_REPORT_EXPORT"}))
+        for risk_id,name,control,test,owner,residual in RISKS:
+            if not db.get(AIRisk,risk_id): db.add(AIRisk(id=risk_id,name=name,control=control,verification_test=test,owner=owner,residual_risk=residual))
         db.commit()
 startup()
 
@@ -79,17 +85,24 @@ def preview_url(pixels: object) -> str:
     return "data:image/png;base64," + base64.b64encode(out.getvalue()).decode("ascii")
 @app.post("/api/predictions", response_model=PredictionOut)
 async def predict(request: Request, file: UploadFile=File(...), db: Session=Depends(get_db)):
-    started=time.perf_counter(); data=await file.read(); v=validate_upload(file.filename or "",file.content_type or "",data); digest=file_digest(data)
-    top=inference_engine.predict(v.pixels,digest); lat=view="UNKNOWN"; body=None
+    started=time.perf_counter(); stage_started=time.perf_counter(); data=await file.read(); upload_ms=(time.perf_counter()-stage_started)*1000
+    stage_started=time.perf_counter(); v=validate_upload(file.filename or "",file.content_type or "",data); digest=file_digest(data); decode_ms=(time.perf_counter()-stage_started)*1000
+    stage_started=time.perf_counter(); lat=view="UNKNOWN"; body=None
     if v.dicom is not None: lat,view,body=metadata_orientation(v.dicom)
-    quality=assess_image_quality(v.pixels)
+    deidentify_ms=(time.perf_counter()-stage_started)*1000
+    stage_started=time.perf_counter(); quality=assess_image_quality(v.pixels); preprocess_ms=(time.perf_counter()-stage_started)*1000
+    stage_started=time.perf_counter(); top=inference_engine.predict(v.pixels,digest); inference_ms=(time.perf_counter()-stage_started)*1000
     extended=assess_extended(v.pixels,top,v.dicom,quality)
     policy_quality=tuple(set(quality.reasons)|set(extended.quality_reasons)|set(extended.metadata_warnings)|({"OUT_OF_DISTRIBUTION"} if extended.distribution_status!="IN_DISTRIBUTION" else set()))
     required,reasons=review_decision(top,lat,view,body,policy_quality)
     p=Prediction(file_hash=digest,file_format=v.format,width=v.width,height=v.height,anatomical_region=top[0]["class"],confidence=top[0]["confidence"],top_predictions=top,laterality=lat,view_position=view,review_required=required,review_reasons=reasons,model_version=settings.model_version,dummy_mode=True,processing_time_ms=max(1,int((time.perf_counter()-started)*1000)))
     pipeline=run_multistage(v,top,digest,lat,view,body); run=PipelineRun(input_hash=digest,status=pipeline["status"],final_route=pipeline["final_route"],stages=pipeline["stages"])
     db.add(p); db.add(run); db.flush(); db.add(LineageEvent(asset_hash=digest,stage="PREDICTION",input_hash=digest,output_hash=file_digest(str(top).encode()),code_version=settings.code_version,config_version="runtime-v1",success=True)); db.add(Notification(event_type="prediction.review_required" if required else "prediction.completed",message="분석 결과가 검토 대기열에 등록되었습니다." if required else "분석이 완료되었습니다.",severity="WARNING" if required else "INFO")); record_audit(db,action="PREDICTION_CREATED",target_id=p.id,request_id=request.headers.get("X-Request-ID","generated"),after={"region":p.anatomical_region,"review_required":p.review_required,"pipeline_run_id":run.id})
-    db.commit(); db.refresh(p); result=serialize(p); result.preview_data_url=preview_url(v.pixels)
+    db_started=time.perf_counter(); db.commit(); db.refresh(p); database_ms=(time.perf_counter()-db_started)*1000
+    total_ms=(time.perf_counter()-started)*1000
+    stages={"file_upload":round(upload_ms,3),"dicom_decode":round(decode_ms,3),"deidentification":round(deidentify_ms,3),"preprocessing":round(preprocess_ms,3),"ai_inference":round(inference_ms,3),"gradcam":0.0,"database_save":round(database_ms,3)}
+    db.add(LatencyRecord(prediction_id=p.id,model_version=p.model_version,device="CPU",stages_ms=stages,total_ms=round(total_ms,3),timed_out=False)); db.commit()
+    result=serialize(p); result.processing_time_ms=max(1,round(total_ms)); result.preview_data_url=preview_url(v.pixels)
     result.quality_status=extended.quality_status;result.quality_score=extended.quality_score;result.quality_reasons=list(extended.quality_reasons);result.distribution_status=extended.distribution_status;result.metadata_status=extended.metadata_status;result.metadata_warnings=list(extended.metadata_warnings);result.routing_target=extended.routing_target;result.priority=extended.priority
     result.pipeline_run_id=run.id;result.pipeline_stages=run.stages
     return result
@@ -102,6 +115,87 @@ def get_prediction(prediction_id: str, db: Session=Depends(get_db)):
     p=db.get(Prediction,prediction_id)
     if not p: raise HTTPException(404,"예측 결과를 찾을 수 없습니다.")
     return serialize(p)
+
+def _integrated_payload(row:XrayAnalysis,findings:list[FindingPredictionRecord]):
+    return {"analysis_id":row.id,"file":{"anonymous_hash":row.anonymous_hash,"modality":row.modality,"is_dicom":row.is_dicom},"quality":row.quality,"anatomical_region":row.region_result,"screening":{"status":row.screening_status},"findings":[{"code":x.code,"display_name":x.display_name,"probability":x.probability,"threshold":x.threshold,"positive":x.positive} for x in findings],"explanation":{"available":False,"type":None,"heatmap_url":None},"uncertainty":row.uncertainty,"routing":row.routing,"model":row.model_info,"disclaimer":"연구·교육용 분석 지원 결과이며 의료진의 진단을 대체하지 않습니다."}
+
+def _run_integrated(data:bytes,filename:str,content_type:str,db:Session):
+    v=validate_upload(filename,content_type,data);digest=file_digest(data);top=inference_engine.predict(v.pixels,digest);quality=assess_image_quality(v.pixels);lat=view="UNKNOWN";body=None
+    if v.dicom is not None:lat,view,body=metadata_orientation(v.dicom)
+    extended=assess_extended(v.pixels,top,v.dicom,quality);finding_result=finding_engine.predict(data);finding_rows=finding_result.findings
+    reasons=[]
+    if extended.quality_status=="REJECT":reasons.append("QUALITY_REJECTED")
+    if extended.distribution_status!="IN_DISTRIBUTION":reasons.append("OUT_OF_DISTRIBUTION")
+    if top[0]["confidence"]<.75:reasons.append("LOW_REGION_CONFIDENCE")
+    if near_threshold(finding_rows):reasons.append("FINDING_NEAR_THRESHOLD")
+    if extended.metadata_status=="CONFLICT":reasons.append("METADATA_CONFLICT")
+    positives=[x for x in finding_rows if x.positive]
+    if positives:reasons.append("ABNORMALITY_SUSPECTED")
+    status="QUALITY_REJECTED" if "QUALITY_REJECTED" in reasons else "OUT_OF_DISTRIBUTION" if "OUT_OF_DISTRIBUTION" in reasons else "REVIEW_REQUIRED" if any(x in reasons for x in ("LOW_REGION_CONFIDENCE","FINDING_NEAR_THRESHOLD","METADATA_CONFLICT")) else "ABNORMALITY_SUSPECTED" if positives else "NO_SIGNIFICANT_FINDING"
+    review=bool(reasons);priority="HIGH" if status in ("QUALITY_REJECTED","OUT_OF_DISTRIBUTION") else "MEDIUM" if review else "LOW"
+    entropy_info=uncertainty([x["confidence"] for x in top]);modality=str(getattr(v.dicom,"Modality","DX" if v.format!="DICOM" else "UNKNOWN"))
+    row=XrayAnalysis(anonymous_hash=digest,modality=modality,is_dicom=v.dicom is not None,quality={"status":extended.quality_status,"score":extended.quality_score,"issues":list(extended.quality_reasons)},region_result={"code":top[0]["class"],"display_name":REGIONS[top[0]["class"]],"confidence":top[0]["confidence"],"top_predictions":top},screening_status=status,uncertainty={"entropy":entropy_info["predictive_entropy"],"ood_status":extended.distribution_status},routing={"review_required":review,"priority":priority,"reasons":reasons},model_info={"region_model_version":settings.model_version,"finding_model_version":finding_result.model_version,"finding_model_name":finding_result.model_name,"checkpoint_hash":finding_result.checkpoint_hash,"dummy_mode":True})
+    db.add(row);db.flush();records=[]
+    for x in finding_rows:
+        record=FindingPredictionRecord(analysis_id=row.id,code=x.code,display_name=x.display_name,probability=x.probability,threshold=x.threshold,positive=x.positive);db.add(record);records.append(record)
+    db.add(ExplanationArtifact(analysis_id=row.id,artifact_type="GRAD_CAM",available=False));db.commit();return _integrated_payload(row,records)
+
+@app.post("/api/v1/xray/analyze")
+async def integrated_analyze(file:UploadFile=File(...),db:Session=Depends(get_db)):
+    data=await file.read();return _run_integrated(data,file.filename or "",file.content_type or "",db)
+
+@app.post("/api/v1/xray/analyze-batch")
+async def integrated_batch(files:list[UploadFile]=File(...),db:Session=Depends(get_db)):
+    if len(files)>20:raise HTTPException(413,"배치는 최대 20개 파일입니다.")
+    blobs=[];total=0
+    for file in files:
+        data=await file.read();total+=len(data)
+        if total>50*1024*1024:raise HTTPException(413,"배치 전체 용량은 50MB를 초과할 수 없습니다.")
+        if (file.filename or "").lower().endswith(".zip"):
+            inspect_zip(data,max_files=20,max_uncompressed=50*1024*1024)
+            with zipfile.ZipFile(BytesIO(data)) as archive:
+                for info in archive.infolist():
+                    if not info.is_dir():blobs.append((info.filename,archive.read(info),"application/dicom" if info.filename.lower().endswith(".dcm") else "image/png" if info.filename.lower().endswith(".png") else "image/jpeg"))
+        else:blobs.append((file.filename or "",data,file.content_type or ""))
+    if len(blobs)>20:raise HTTPException(413,"압축 해제 후 파일 수는 최대 20개입니다.")
+    results=[]
+    for name,data,mime in blobs:
+        try:results.append({"file":name,"status":"SUCCESS","result":_run_integrated(data,name,mime,db)})
+        except Exception as exc:db.rollback();results.append({"file":name,"status":"FAILED","error":str(exc)})
+    return {"count":len(results),"results":results}
+
+@app.get("/api/v1/xray/analyses/{analysis_id}")
+def integrated_get(analysis_id:str,db:Session=Depends(get_db)):
+    row=db.get(XrayAnalysis,analysis_id)
+    if not row:raise HTTPException(404,"통합 분석 결과를 찾을 수 없습니다.")
+    findings=db.scalars(select(FindingPredictionRecord).where(FindingPredictionRecord.analysis_id==analysis_id)).all();return _integrated_payload(row,findings)
+
+@app.get("/api/v1/xray/analyses/{analysis_id}/heatmap")
+def integrated_heatmap(analysis_id:str,db:Session=Depends(get_db)):
+    if not db.get(XrayAnalysis,analysis_id):raise HTTPException(404,"통합 분석 결과를 찾을 수 없습니다.")
+    raise HTTPException(404,"DUMMY 모델은 실제 Grad-CAM을 제공하지 않습니다.")
+
+@app.get("/api/v1/xray/analyses/{analysis_id}/report")
+def integrated_report(analysis_id:str,db:Session=Depends(get_db)):
+    row=db.get(XrayAnalysis,analysis_id)
+    if not row:raise HTTPException(404,"통합 분석 결과를 찾을 수 없습니다.")
+    data=_simple_pdf(["Integrated X-Ray AI Support Report",f"Anonymous ID: {row.id}",f"Region: {row.region_result['code']}",f"Screening: {row.screening_status}",f"Model: {row.model_info['finding_model_version']} (DUMMY)","Research and education only. Not a medical diagnosis."])
+    return Response(data,media_type="application/pdf",headers={"Content-Disposition":f"attachment; filename={row.id}.pdf"})
+
+@app.get("/api/v1/xray/worklist")
+def integrated_worklist(reason:str|None=None,status:str|None=None,db:Session=Depends(get_db)):
+    rows=db.scalars(select(XrayAnalysis).order_by(XrayAnalysis.created_at.desc())).all();out=[]
+    for row in rows:
+        if not row.routing.get("review_required") or (reason and reason not in row.routing.get("reasons",[])) or (status and row.screening_status!=status):continue
+        out.append({"analysis_id":row.id,"screening_status":row.screening_status,"priority":row.routing["priority"],"reasons":row.routing["reasons"],"created_at":row.created_at})
+    return sorted(out,key=lambda x:({"HIGH":0,"MEDIUM":1,"LOW":2}[x["priority"]],x["created_at"]),reverse=False)
+
+@app.patch("/api/v1/xray/analyses/{analysis_id}/review")
+def integrated_review(analysis_id:str,body:IntegratedReviewIn,request:Request,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    role=require_role(x_role,{"REVIEWER","ADMIN"});row=db.get(XrayAnalysis,analysis_id)
+    if not row:raise HTTPException(404,"통합 분석 결과를 찾을 수 없습니다.")
+    before={"region":row.region_result["code"],"findings":[x.code for x in db.scalars(select(FindingPredictionRecord).where(FindingPredictionRecord.analysis_id==analysis_id,FindingPredictionRecord.positive==True)).all()]};after={"region":body.final_region,"findings":body.final_findings}
+    event=record_audit(db,action="XRAY_ANALYSIS_REVIEWED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),before=before,after=after,reason=body.comment,actor_role=role);db.flush();db.add(ClinicalReview(analysis_id=row.id,reviewer_role=role,final_region=body.final_region,final_findings=body.final_findings,comment=body.comment,before_value=before,after_value=after,audit_event_id=getattr(event,"id",None)));row.reviewed=True;row.routing={**row.routing,"review_required":False,"review_status":"COMPLETED"};db.commit();return {"analysis_id":row.id,"reviewed":True,"before":before,"after":after}
 @app.patch("/api/predictions/{prediction_id}/review", response_model=PredictionOut)
 def review(prediction_id: str, body: ReviewUpdate, request: Request, db: Session=Depends(get_db)):
     if body.corrected_region not in REGIONS: raise HTTPException(422,"지원하지 않는 분류입니다.")
@@ -114,6 +208,61 @@ def review(prediction_id: str, body: ReviewUpdate, request: Request, db: Session
 def stats(db: Session=Depends(get_db)):
     rows=db.execute(select(Prediction.anatomical_region,func.count(),func.avg(Prediction.confidence)).group_by(Prediction.anatomical_region)).all(); total=db.scalar(select(func.count()).select_from(Prediction)) or 0; review=db.scalar(select(func.count()).select_from(Prediction).where(Prediction.review_required==True)) or 0
     return {"total":total,"average_confidence":float(db.scalar(select(func.avg(Prediction.confidence))) or 0),"review_required_rate":review/total if total else 0,"by_region":[{"class":r[0],"count":r[1],"average_confidence":r[2]} for r in rows]}
+
+@app.get("/api/ai-literacy/transparency")
+def transparency():
+    return {"ai_used":True,"dummy_model":True,"model_name":MODEL_CARDS[0]["name"],"model_version":settings.model_version,"training_data_source":"학습하지 않은 결정론적 더미 모델","input_resolution":"가변 입력, 검증 후 회색조 처리","supported_classes":list(REGIONS),"known_limitations":MODEL_CARDS[0]["limitations"],"last_validation_date":"2026-08-31","approval_status":"DEMO_ONLY","performance_report":"/docs/validation-summary.md","diagnostic_use":False}
+
+@app.get("/api/ai-literacy/confidence/{value}")
+def explain_confidence(value: float):
+    if value<0 or value>1: raise HTTPException(422,"신뢰도는 0과 1 사이여야 합니다.")
+    return confidence_explanation(value)
+
+@app.get("/api/ai-literacy/model-cards")
+def model_cards(): return MODEL_CARDS
+
+@app.get("/api/ai-literacy/dataset-cards")
+def dataset_cards(): return DATASET_CARDS
+
+@app.get("/api/ai-literacy/glossary")
+def glossary(): return [{"term":term,"explanation":explanation} for term,explanation in GLOSSARY.items()]
+
+@app.get("/api/ai-literacy/consent")
+def consent_requirements(): return {"version":CONSENT_VERSION,"items":CONSENT_ITEMS,"required":True}
+
+@app.post("/api/ai-literacy/consent")
+def record_consent(body: ConsentIn, db: Session=Depends(get_db)):
+    if body.consent_version!=CONSENT_VERSION or not body.accepted or not set(CONSENT_ITEMS).issubset(body.accepted_items): raise HTTPException(422,"현재 버전의 모든 필수 주의사항에 동의해야 합니다.")
+    row=UserConsent(anonymous_user_id=body.anonymous_user_id,consent_version=body.consent_version,accepted_items=body.accepted_items,accepted=True); db.add(row); db.commit(); db.refresh(row)
+    return {"consent_id":row.id,"version":row.consent_version,"confirmed_at":row.confirmed_at,"accepted":row.accepted}
+
+@app.post("/api/ai-literacy/reports")
+def report_issue(body: MisclassificationReportIn, db: Session=Depends(get_db)):
+    if body.report_type not in REPORT_TYPES: raise HTTPException(422,"지원하지 않는 신고 유형입니다.")
+    prediction=db.get(Prediction,body.prediction_id)
+    if not prediction: raise HTTPException(404,"예측 결과를 찾을 수 없습니다.")
+    privacy=body.report_type=="POSSIBLE_PRIVACY_EXPOSURE"; high_confidence=prediction.confidence>=.85
+    prediction.review_required=True
+    if "USER_REPORT" not in prediction.review_reasons: prediction.review_reasons=[*(prediction.review_reasons or []),"USER_REPORT"]
+    row=MisclassificationReport(prediction_id=prediction.id,report_type=body.report_type,description=body.description,severity="HIGH" if privacy or high_confidence else "MEDIUM",linked_work_item=f"REVIEW-{prediction.id}",capa_candidate=privacy or high_confidence)
+    db.add(row); db.commit(); db.refresh(row)
+    return {"report_id":row.id,"status":row.status,"linked_work_item":row.linked_work_item,"capa_candidate":row.capa_candidate,"review_required":True}
+
+@app.get("/api/ai-literacy/latency")
+def latency_dashboard(db: Session=Depends(get_db)):
+    rows=db.scalars(select(LatencyRecord).order_by(LatencyRecord.created_at.desc())).all(); values=[r.total_ms for r in rows]
+    models={}
+    for r in rows: models.setdefault(r.model_version,[]).append(r.total_ms)
+    return {"unit":"ms","count":len(rows),"average":sum(values)/len(values) if values else 0,"p50":percentile(values,.5),"p95":percentile(values,.95),"p99":percentile(values,.99),"throughput_per_minute":len(rows),"timeout_rate":sum(r.timed_out for r in rows)/len(rows) if rows else 0,"device_comparison":{"CPU":sum(values)/len(values) if values else 0,"GPU":None},"model_comparison":{k:sum(v)/len(v) for k,v in models.items()},"latest_stages":rows[0].stages_ms if rows else {}}
+
+@app.get("/api/ai-literacy/dashboard")
+def responsible_dashboard(db: Session=Depends(get_db)):
+    predictions=db.scalars(select(Prediction)).all(); reports=db.scalars(select(MisclassificationReport)).all(); total=len(predictions)
+    return {"sample_size":total,"review_required_rate":sum(p.review_required for p in predictions)/total if total else 0,"user_correction_rate":sum(p.corrected_region is not None for p in predictions)/total if total else 0,"high_confidence_errors":sum(p.confidence>=.85 and p.corrected_region not in (None,p.anatomical_region) for p in predictions),"unknown_rate":sum(p.anatomical_region=="UNKNOWN" for p in predictions)/total if total else 0,"ood_rate":"표본 메타데이터 부족","quality_failure_rate":"표본 메타데이터 부족","dataset_performance":"실제 검토 정답이 부족하여 미측정","model_performance":"실제 검토 정답이 부족하여 미측정","user_reports":len(reports),"privacy_events":sum(r.report_type=="POSSIBLE_PRIVACY_EXPOSURE" for r in reports),"drift_warning":"INSUFFICIENT_SAMPLE"}
+
+@app.get("/api/ai-literacy/risks")
+def ai_risks(db: Session=Depends(get_db)):
+    return [{"risk_id":r.id,"name":r.name,"control":r.control,"verification_test":r.verification_test,"owner":r.owner,"residual_risk":r.residual_risk} for r in db.scalars(select(AIRisk).order_by(AIRisk.id)).all()]
 @app.get("/api/statistics/confusion-matrix")
 def confusion_matrix(): return {"available":False,"message":"검토된 정답 데이터가 충분할 때 계산됩니다.","labels":list(REGIONS),"matrix":[]}
 

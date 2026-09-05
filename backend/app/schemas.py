@@ -81,3 +81,19 @@ class AgentFeedbackIn(BaseModel):
 class AgentActionIn(BaseModel):
     action: str
     arguments: dict = {}
+
+class ConsentIn(BaseModel):
+    anonymous_user_id: str = Field(min_length=3, max_length=64)
+    consent_version: str = Field(min_length=1, max_length=32)
+    accepted_items: list[str]
+    accepted: bool
+
+class MisclassificationReportIn(BaseModel):
+    prediction_id: str
+    report_type: str
+    description: str = Field(default="", max_length=1000)
+
+class IntegratedReviewIn(BaseModel):
+    final_region: str
+    final_findings: list[str] = []
+    comment: str = Field(default="",max_length=2000)
