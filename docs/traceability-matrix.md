@@ -49,3 +49,25 @@ CSV 버전은 `docs/traceability-matrix.csv`이며 테스트 실행 후 결과 �
 | REQ-20-09 | RISK-ZIP-BOMB | `inspect_zip`, `POST /api/batches/inspect` | TEST-20-ZIP | PASS |
 | REQ-20-16 | RISK-UNCERTAINTY | `uncertainty`, `POST /api/uncertainty` | TEST-20-UNCERTAINTY | PASS |
 | REQ-20-22 | RISK-UNAUTHORIZED-ADMIN | `GET /api/admin/dashboard`, `App.tsx` | TEST-20-RBAC | PASS |
+
+## Phase 23 책임 있는 AI
+
+| 요구사항 ID | 위험 ID | 구현 파일 | API | 테스트 ID | 결과 |
+|---|---|---|---|---|---|
+| RAI-REQ-01 결과 이해·신뢰도 | RAI-02, RAI-05 | `App.tsx`, `responsible_ai.py` | `GET /api/ai-literacy/confidence/{value}` | `test_transparency_content_and_cards` | PASS |
+| RAI-REQ-02 단계별 latency | RAI-07 | `main.py`, `models.py` | `GET /api/ai-literacy/latency` | `test_latency_measurement_and_p95` | PASS |
+| RAI-REQ-03 교육·퀴즈·접근성 | RAI-01 | `frontend/src/App.tsx` | N/A | `App.test.tsx` | PASS |
+| RAI-REQ-04 사용자 동의 | RAI-02, RAI-09 | `models.py`, `main.py` | `POST /api/ai-literacy/consent` | `test_consent_version_is_recorded` | PASS |
+| RAI-REQ-05 모델·데이터셋 카드 | RAI-03, RAI-04, RAI-10 | `responsible_ai.py` | `GET /api/ai-literacy/model-cards`, `dataset-cards` | `test_transparency_content_and_cards` | PASS |
+| RAI-REQ-06 오분류 신고·HITL | RAI-08, RAI-09, RAI-12 | `models.py`, `main.py` | `POST /api/ai-literacy/reports` | `test_misclassification_report_forces_human_review` | PASS |
+| RAI-REQ-07 대시보드·위험 등록부 | RAI-01~12 | `responsible_ai.py`, `main.py` | `GET /api/ai-literacy/dashboard`, `risks` | `test_responsible_dashboard_and_risk_registry` | PASS |
+
+## 통합 X-ray AI 분석 지원
+
+| 요구사항 ID | 위험 ID | 구현 파일 | API | 테스트 ID | 결과 |
+|---|---|---|---|---|---|
+| IXA-01 다중 라벨 소견 | RAI-02, RAI-08 | `ml/xray_findings/*` | `POST /api/v1/xray/analyze` | `test_dummy_multilabel_is_reproducible` | PASS |
+| IXA-02 통합 안전 라우팅 | RAI-06, RAI-12 | `backend/app/main.py` | `POST /api/v1/xray/analyze` | `test_quality_review_get_and_clinical_review_audit` | PASS |
+| IXA-03 DUMMY 히트맵 차단 | RAI-05 | `gradcam.py`, `main.py` | `GET /api/v1/xray/analyses/{id}/heatmap` | `test_integrated_png_schema_reproducibility_and_heatmap_block` | PASS |
+| IXA-04 배치 제한 | RISK-ZIP-BOMB | `institution.py`, `main.py` | `POST /api/v1/xray/analyze-batch` | `test_corrupt_file_and_batch_limit` | PASS |
+| IXA-05 의료진 검토·감사 | RAI-01, RAI-08 | `ClinicalReview`, `AuditEvent` | `PATCH /api/v1/xray/analyses/{id}/review` | `test_quality_review_get_and_clinical_review_audit` | PASS |
