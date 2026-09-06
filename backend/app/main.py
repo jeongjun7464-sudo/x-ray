@@ -12,7 +12,7 @@ from app.core.constants import REGIONS
 from app.core.logging import configure_logging
 from app.core.rate_limit import SlidingWindowLimiter
 from app.db.database import Base, engine, get_db
-from app.db.models import AIRisk, AgentActionProposal, AgentFeedback, AgentRun, AuditEvent, Capa, ClinicalReview, CodeMapping, Defect, ExplanationArtifact, FeatureFlag, FindingPredictionRecord, IntegrationEvent, LabelTask, LatencyRecord, LineageEvent, MisclassificationReport, ModelRegistry, Notification, PipelineRun, Prediction, ProtocolDefinition, RoutingRule, Study, StudyInstance, UserConsent, XrayAnalysis
+from app.db.models import AIRisk, ActiveLearningCandidate, AgentActionProposal, AgentFeedback, AgentRun, AuditEvent, Capa, ClinicalReview, CodeMapping, DatasetVersion, Defect, ExplanationArtifact, FeatureFlag, FindingPredictionRecord, IntegrationEvent, LabelTask, LatencyRecord, LineageEvent, LongitudinalComparison, MisclassificationReport, ModelDeployment, ModelRegistry, Notification, PipelineRun, Prediction, ProtocolDefinition, RoutingRule, Study, StudyInstance, UserConsent, XrayAnalysis
 from app.schemas import AgentActionIn, AgentChatIn, AgentFeedbackIn, CodeMappingIn, ConsentIn, IntegratedReviewIn, MisclassificationReportIn, PredictionOut, ProtocolIn, ReviewUpdate, RoutingRuleIn, StudyTagsIn, ValidationOut
 from app.services.dicom_service import metadata_orientation
 from app.services.file_validation import validate_upload
@@ -26,6 +26,7 @@ from app.services.institution import apply_rules, dicom_group_metadata, experime
 from app.services.advanced_ai import detection_interface, landmark_interface, preprocessing_comparison, reproducibility_manifest, run_multistage, stress_test
 from app.services.medical_agent import mask_sensitive, run_agent
 from app.services.responsible_ai import CONSENT_ITEMS, CONSENT_VERSION, DATASET_CARDS, GLOSSARY, MODEL_CARDS, REPORT_TYPES, RISKS, confidence_explanation, percentile
+from app.services.advanced_workflows import DISCLAIMER as RESEARCH_DISCLAIMER, build_manifest, comparison_compatibility, failure_metrics
 from xray_findings import FindingInferenceEngine
 from xray_findings.postprocess import near_threshold
 
@@ -195,7 +196,74 @@ def integrated_review(analysis_id:str,body:IntegratedReviewIn,request:Request,x_
     role=require_role(x_role,{"REVIEWER","ADMIN"});row=db.get(XrayAnalysis,analysis_id)
     if not row:raise HTTPException(404,"통합 분석 결과를 찾을 수 없습니다.")
     before={"region":row.region_result["code"],"findings":[x.code for x in db.scalars(select(FindingPredictionRecord).where(FindingPredictionRecord.analysis_id==analysis_id,FindingPredictionRecord.positive==True)).all()]};after={"region":body.final_region,"findings":body.final_findings}
-    event=record_audit(db,action="XRAY_ANALYSIS_REVIEWED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),before=before,after=after,reason=body.comment,actor_role=role);db.flush();db.add(ClinicalReview(analysis_id=row.id,reviewer_role=role,final_region=body.final_region,final_findings=body.final_findings,comment=body.comment,before_value=before,after_value=after,audit_event_id=getattr(event,"id",None)));row.reviewed=True;row.routing={**row.routing,"review_required":False,"review_status":"COMPLETED"};db.commit();return {"analysis_id":row.id,"reviewed":True,"before":before,"after":after}
+    event=record_audit(db,action="XRAY_ANALYSIS_REVIEWED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),before=before,after=after,reason=body.comment,actor_role=role);db.flush();db.add(ClinicalReview(analysis_id=row.id,reviewer_role=role,final_region=body.final_region,final_findings=body.final_findings,comment=body.comment,before_value=before,after_value=after,audit_event_id=getattr(event,"id",None)));db.add(ActiveLearningCandidate(analysis_id=row.id,anonymous_hash=row.anonymous_hash,original_labels=before,corrected_labels=after,model_version=row.model_info.get("finding_model_version","UNKNOWN"),auto_training_enabled=False));row.reviewed=True;row.routing={**row.routing,"review_required":False,"review_status":"COMPLETED"};db.commit();return {"analysis_id":row.id,"reviewed":True,"before":before,"after":after,"active_learning_candidate":True,"automatic_retraining":False}
+
+@app.post("/api/v1/xray/longitudinal-comparisons")
+def create_longitudinal_comparison(body:dict,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    require_role(x_role,{"REVIEWER","ADMIN"});prior=db.get(XrayAnalysis,body.get("prior_analysis_id"));current=db.get(XrayAnalysis,body.get("current_analysis_id"))
+    if not prior or not current:raise HTTPException(404,"비교할 분석 결과를 찾을 수 없습니다.")
+    compatibility=comparison_compatibility(body.get("prior_context",{}),body.get("current_context",{}))
+    def positives(row):return {x.code for x in db.scalars(select(FindingPredictionRecord).where(FindingPredictionRecord.analysis_id==row.id,FindingPredictionRecord.positive==True)).all()}
+    old,new=positives(prior),positives(current);changes={"region_changed":prior.region_result["code"]!=current.region_result["code"],"new_findings":sorted(new-old),"resolved_findings":sorted(old-new),"interpretation":"변화 탐지 결과는 의료진 확인 전 확정되지 않습니다."}
+    row=LongitudinalComparison(prior_analysis_id=prior.id,current_analysis_id=current.id,compatibility=compatibility,changes=changes);db.add(row);db.commit();return {"comparison_id":row.id,"compatibility":compatibility,"changes":changes,"review_required":True,"disclaimer":RESEARCH_DISCLAIMER}
+
+@app.get("/api/v1/xray/longitudinal-comparisons/{comparison_id}")
+def get_longitudinal_comparison(comparison_id:str,db:Session=Depends(get_db)):
+    row=db.get(LongitudinalComparison,comparison_id)
+    if not row:raise HTTPException(404,"비교 결과를 찾을 수 없습니다.")
+    return {"comparison_id":row.id,"prior_analysis_id":row.prior_analysis_id,"current_analysis_id":row.current_analysis_id,"compatibility":row.compatibility,"changes":row.changes,"review_status":row.review_status,"disclaimer":RESEARCH_DISCLAIMER}
+
+@app.get("/api/v1/active-learning/candidates")
+def active_candidates(x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    require_role(x_role,{"REVIEWER","ADMIN"});rows=db.scalars(select(ActiveLearningCandidate).order_by(ActiveLearningCandidate.created_at.desc())).all();return [{"candidate_id":x.id,"analysis_id":x.analysis_id,"anonymous_hash":x.anonymous_hash,"original_labels":x.original_labels,"corrected_labels":x.corrected_labels,"model_version":x.model_version,"approved_for_export":x.approved_for_export,"automatic_retraining":x.auto_training_enabled} for x in rows]
+
+@app.post("/api/v1/datasets")
+def create_dataset(body:dict,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    require_role(x_role,{"ADMIN"})
+    try:manifest,duplicates=build_manifest(body.get("items",[]))
+    except ValueError as exc:raise HTTPException(422,str(exc))
+    row=DatasetVersion(name=str(body.get("name","xray-dataset"))[:100],version=str(body.get("version","v1"))[:32],status="DRAFT",manifest=manifest,duplicate_count=duplicates);db.add(row);db.commit();return {"dataset_id":row.id,"name":row.name,"version":row.version,"status":row.status,"deidentification":"HASH_ONLY_NO_RAW_IDENTIFIERS","duplicates_removed":duplicates,"patient_level_split":True,"items":manifest,"performance":"NOT_MEASURED"}
+
+@app.post("/api/v1/datasets/{dataset_id}/approve")
+def approve_dataset(dataset_id:str,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    require_role(x_role,{"ADMIN"});row=db.get(DatasetVersion,dataset_id)
+    if not row:raise HTTPException(404,"데이터셋 버전을 찾을 수 없습니다.")
+    if any(x.get("label_status")!="APPROVED" for x in row.manifest):raise HTTPException(409,"모든 다중 소견 라벨의 승인이 필요합니다.")
+    row.status="APPROVED";db.commit();return {"dataset_id":row.id,"status":row.status}
+
+@app.get("/api/v1/datasets/{dataset_id}/manifest.csv")
+def dataset_manifest(dataset_id:str,db:Session=Depends(get_db)):
+    row=db.get(DatasetVersion,dataset_id)
+    if not row:raise HTTPException(404,"데이터셋 버전을 찾을 수 없습니다.")
+    out=__import__('io').StringIO();writer=csv.writer(out);writer.writerow(["anonymous_hash","patient_hash","split","region","findings","label_status","dataset_version"])
+    for x in row.manifest:writer.writerow([x["anonymous_hash"],x["patient_hash"],x["split"],x["region"],"|".join(x["findings"]),x["label_status"],row.version])
+    return Response(('\ufeff'+out.getvalue()).encode(),media_type="text/csv",headers={"Content-Disposition":f"attachment; filename={row.name}-{row.version}.csv"})
+
+@app.post("/api/v1/failure-analysis")
+def failure_analysis(body:dict,x_role:str|None=Header(default=None,alias="X-Role")):
+    require_role(x_role,{"REVIEWER","ADMIN"});return {**failure_metrics(body.get("validated_cases",[])),"quality_breakdown":"NOT_MEASURED" if not body.get("validated_cases") else "REQUIRES_QUALITY_LABELS","institution_equipment_breakdown":"INSUFFICIENT_SAMPLE","disclaimer":RESEARCH_DISCLAIMER}
+
+@app.post("/api/v1/model-monitoring/deployments")
+def register_deployment(body:dict,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    require_role(x_role,{"ADMIN"});sha=str(body.get("checkpoint_sha256","")).lower()
+    if len(sha)!=64 or any(c not in "0123456789abcdef" for c in sha):raise HTTPException(422,"체크포인트 SHA-256이 필요합니다.")
+    row=ModelDeployment(model_version=body.get("model_version","UNKNOWN"),checkpoint_sha256=sha,dataset_version=body.get("dataset_version","UNSPECIFIED"),deployment_status=body.get("deployment_status","DEMO_ONLY"),performance_status="NOT_MEASURED",drift_status="INSUFFICIENT_DATA");db.add(row);db.commit();return {"deployment_id":row.id,"model_version":row.model_version,"checkpoint_sha256":row.checkpoint_sha256,"dataset_version":row.dataset_version,"deployment_status":row.deployment_status,"performance_status":row.performance_status,"drift_status":row.drift_status}
+
+@app.get("/api/v1/model-monitoring")
+def model_monitoring(db:Session=Depends(get_db)):
+    rows=db.scalars(select(ModelDeployment).order_by(ModelDeployment.created_at.desc())).all();return {"deployments":[{"deployment_id":x.id,"model_version":x.model_version,"checkpoint_sha256":x.checkpoint_sha256,"dataset_version":x.dataset_version,"deployment_status":x.deployment_status,"performance_status":x.performance_status,"drift_status":x.drift_status} for x in rows],"rule":"실제 검증 정답과 기준 기간 데이터가 없으면 성능 저하·드리프트 수치를 생성하지 않습니다."}
+
+@app.get("/api/v1/regulatory-documents")
+def regulatory_documents():
+    names=[("SRS","요구사항 명세서"),("RISK","위험관리표"),("VVP","검증 계획서"),("VTR","시험 결과 보고서"),("MCIA","모델 변경 영향평가"),("TRACE","추적성 매트릭스")]
+    return [{"document_id":code,"title":title,"status":"AUTO_GENERATED_DRAFT","review_required":True,"download_url":f"/api/v1/regulatory-documents/{code}.md"} for code,title in names]
+
+@app.get("/api/v1/regulatory-documents/{document_id}.md")
+def regulatory_document(document_id:str):
+    allowed={"SRS":"요구사항 명세서","RISK":"위험관리표","VVP":"검증 계획서","VTR":"시험 결과 보고서","MCIA":"모델 변경 영향평가","TRACE":"추적성 매트릭스"}
+    if document_id not in allowed:raise HTTPException(404,"문서를 찾을 수 없습니다.")
+    content=f"# {allowed[document_id]}\n\n상태: 자동 생성 초안 / 승인 전 사용 금지\n\n- 시스템: X-ray 연구·교육용 분석 지원\n- 성능: NOT_MEASURED (실제 검증 데이터 없음)\n- 사람 검토: 필수\n- 생성 시각: {datetime.now(timezone.utc).isoformat()}\n\n{RESEARCH_DISCLAIMER}\n"
+    return Response(content,media_type="text/markdown",headers={"Content-Disposition":f"attachment; filename={document_id}.md"})
 @app.patch("/api/predictions/{prediction_id}/review", response_model=PredictionOut)
 def review(prediction_id: str, body: ReviewUpdate, request: Request, db: Session=Depends(get_db)):
     if body.corrected_region not in REGIONS: raise HTTPException(422,"지원하지 않는 분류입니다.")
