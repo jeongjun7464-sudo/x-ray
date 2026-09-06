@@ -10,7 +10,7 @@
 
 주요 API는 `POST /api/v1/xray/analyze`, `POST /api/v1/xray/analyze-batch`, `GET /api/v1/xray/analyses/{id}`, `/heatmap`, `/report`, `GET /api/v1/xray/worklist`, `PATCH /api/v1/xray/analyses/{id}/review`입니다.
 
-검증 결과: 백엔드·ML **56 passed**, 프론트엔드 **8 passed**, TypeScript/Vite 빌드 성공. 현재 환경에는 Docker CLI가 없어 `docker compose config`는 실행하지 못했습니다.
+검증 결과: 백엔드·ML **62 passed**, 프론트엔드 **9 passed**, TypeScript/Vite 빌드 성공. 현재 환경에는 Docker CLI가 없어 `docker compose config`는 실행하지 못했습니다.
 
 이 결과는 연구·교육용 분석 지원 정보이며 의료진의 진단이나 치료 결정을 대체하지 않습니다. 포트폴리오에서는 DICOM 보안, 다중 라벨 ML 계약, Human-in-the-loop, 모델 계보, 감사 로그와 책임 있는 AI를 강조합니다.
 
@@ -316,9 +316,51 @@ flowchart TD
 | API | FastAPI, Pydantic, multipart upload |
 | Medical imaging | pydicom, Pillow, NumPy |
 | ML structure | PyTorch, torchvision, DenseNet121, Grad-CAM module |
+| Agent / sLLM | LangGraph, deterministic dummy, vLLM·OpenAI-compatible adapter |
+| Retrieval | BM25, Reciprocal Rank Fusion, Qdrant REST adapter, local fallback embedding |
 | Database | SQLAlchemy, Alembic, SQLite 개발 모드, PostgreSQL Docker 모드 |
 | Security | 파일 시그니처 검증, SHA-256 익명 해시, 역할 헤더 검사, HMAC, CSP, rate limit |
 | Delivery | Docker Compose, nginx, GitHub Actions |
+
+## sLLM·Qdrant 업무지원 확장
+
+의료영상 분석 결과를 구조화한 뒤 LangGraph Agent가 승인 문서를 BM25와 Qdrant dense vector로 검색하고, 근거가 있을 때만 sLLM에 전달한다. sLLM은 영상 픽셀을 직접 분석하지 않으며 업무지원 JSON만 생성한다. 인용 ID는 실제 검색 결과와 대조하고 모든 답변은 사람의 확인이 필요하다.
+
+```mermaid
+flowchart LR
+    XRAY[X-ray 구조화 결과] --> GRAPH[LangGraph Agent]
+    GRAPH --> BM25[BM25]
+    GRAPH --> QDRANT[Qdrant Dense Search]
+    BM25 --> RRF[RRF 및 역할 승인 기관 필터]
+    QDRANT --> RRF
+    RRF --> PROMPT[Grounded Prompt]
+    PROMPT --> LLM[sLLM Adapter]
+    LLM --> VERIFY[JSON 근거 안전 검증]
+    VERIFY --> REVIEW[의료진 확인]
+    QDRANT -. 연결 실패 .-> FALLBACK[LOCAL_FALLBACK]
+    FALLBACK --> RRF
+```
+
+- 실제 구현: LangGraph 노드 흐름, BM25/RRF, Qdrant REST adapter, 승인·역할·기관 필터, JSON·citation·안전 검증, trace 저장.
+- `DEMO/DUMMY`: 기본 deterministic 언어모델과 로컬 hashing embedding. 동일 입력은 동일 답변을 만든다.
+- `LOCAL_FALLBACK`: Qdrant가 없으면 승인된 로컬 문서 검색을 계속하며 상태를 숨기지 않는다.
+- 향후 연동: vLLM/OpenAI-compatible endpoint와 운영 Qdrant TLS/API Key. 연결 전에는 실제 sLLM 운영으로 표시하지 않는다.
+
+Qdrant collection `xray_knowledge`에는 문서·버전·청크·섹션·승인·역할·기관·유효기간·content hash·embedding 모델을 저장한다. 환자정보, 원본 DICOM, X-ray 픽셀, 인증정보는 저장하지 않는다.
+
+```bash
+docker compose up --build
+PYTHONPATH=backend python scripts/check_qdrant.py
+PYTHONPATH=backend python scripts/index_knowledge.py
+# NVIDIA GPU 환경에서만
+docker compose --profile gpu up vllm
+```
+
+vLLM 연결은 `.env`에서 `LLM_PROVIDER=vllm`, `LLM_BASE_URL=http://vllm:8000/v1`, `LLM_MODEL_NAME`을 설정한다. 지식 문서는 `docs/knowledge` front matter를 검증하고 개인정보가 없을 때만 색인한다.
+
+평가는 Retrieval의 Hit/Recall@5·MRR·nDCG, Generation의 citation·groundedness·schema·safety, Agent의 intent·tool·권한·완료·latency·fallback을 대상으로 한다. 실제 평가 데이터가 없으므로 성능 수치를 작성하지 않는다.
+
+상세 문서: [sLLM 구조](docs/sllm-architecture.md), [Qdrant 설계](docs/qdrant-collection-design.md), [Hybrid Retrieval](docs/hybrid-retrieval.md), [Agent 흐름](docs/agent-workflow.md), [문서 거버넌스](docs/knowledge-governance.md), [평가](docs/agent-evaluation.md), [배포](docs/sllm-deployment.md).
 
 상세 내용은 [실제 적용 기술 스택](docs/technology-stack.md)과 [아키텍처](docs/architecture.md)를 참고하세요.
 
@@ -399,8 +441,8 @@ npm run build
 
 현재 검증 기준:
 
-- 백엔드·ML: **56 tests passed**
-- 프론트엔드: **8 tests passed**
+- 백엔드·ML: **62 tests passed**
+- 프론트엔드: **9 tests passed**
 - TypeScript 검사 및 Vite 프로덕션 빌드 통과
 
 요구사항과 위험, 구현 파일, API, 테스트 연결은 [추적성 매트릭스](docs/traceability-matrix.md)에 기록합니다.
@@ -453,7 +495,7 @@ Phase 20 범위는 [의료기관 연동 구현 현황](docs/phase20-implementati
 - 운영 지표, 모델 사용량, 최근 API 오류와 PACS/DB/모델/큐 상태 화면
 - 반복 오류 임계값 기반 CAPA 후보와 분석·모델·데이터 버전 추적
 
-자동시험은 현재 **백엔드·ML 56개, 프론트엔드 8개**가 통과하고 TypeScript/Vite 프로덕션 빌드가 성공한다. 실제 PACS/Orthanc 네트워크, 운영 인증, 실제 모델 Grad-CAM, 영속 메트릭 백엔드와 임상 검증은 연결되지 않았다. 따라서 이러한 항목은 구현 완료로 표시하지 않으며 실제 성능 수치도 제공하지 않는다. 자세한 내용은 [PACS 설계](docs/pacs-integration.md), [모델 릴리스](docs/model-release-process.md), [임상 검토](docs/clinical-review-workflow.md), [CAPA](docs/capa-workflow.md), [운영 모니터링](docs/operations-monitoring.md), [RBAC](docs/rbac-matrix.md)을 참고한다.
+자동시험은 현재 **백엔드·ML 62개, 프론트엔드 9개**가 통과하고 TypeScript/Vite 프로덕션 빌드가 성공한다. 실제 PACS/Orthanc 네트워크, 운영 인증, 실제 모델 Grad-CAM, 영속 메트릭 백엔드와 임상 검증은 연결되지 않았다. 따라서 이러한 항목은 구현 완료로 표시하지 않으며 실제 성능 수치도 제공하지 않는다. 자세한 내용은 [PACS 설계](docs/pacs-integration.md), [모델 릴리스](docs/model-release-process.md), [임상 검토](docs/clinical-review-workflow.md), [CAPA](docs/capa-workflow.md), [운영 모니터링](docs/operations-monitoring.md), [RBAC](docs/rbac-matrix.md)을 참고한다.
 
 ## 검증·재현·감사 대응
 

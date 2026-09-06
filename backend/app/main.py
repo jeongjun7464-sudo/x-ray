@@ -12,7 +12,7 @@ from app.core.constants import REGIONS
 from app.core.logging import configure_logging
 from app.core.rate_limit import SlidingWindowLimiter
 from app.db.database import Base, engine, get_db
-from app.db.models import AIRisk, ActiveLearningCandidate, AgentActionProposal, AgentFeedback, AgentRun, AnalysisProvenance, AnnotationRecord, AuditEvent, AuditPackage, Capa, ClinicalReview, CodeMapping, DatasetVersion, Defect, DefectRecord, ErrorOccurrence, ExplanationArtifact, FeatureFlag, FindingPredictionRecord, IntegrationEvent, LabelTask, LatencyRecord, LineageEvent, LongitudinalComparison, MisclassificationReport, ModelDeployment, ModelRegistry, ModelRelease, Notification, OperationalCapa, PipelineRun, Prediction, ProtocolDefinition, RecoveryJob, ReviewPriorityRule, RoutingRule, SecurityEvent, Study, StudyAnalysis, StudyInstance, TestEvidence, TestExecution, TestRequirement, TestScenario, UserConsent, XrayAnalysis
+from app.db.models import AIRisk, ActiveLearningCandidate, AgentActionProposal, AgentConversation, AgentFeedback, AgentMessage, AgentRetrievalEvent, AgentRun, AnalysisProvenance, AnnotationRecord, AuditEvent, AuditPackage, Capa, ClinicalReview, CodeMapping, DatasetVersion, Defect, DefectRecord, ErrorOccurrence, ExplanationArtifact, FeatureFlag, FindingPredictionRecord, IntegrationEvent, KnowledgeChunk, KnowledgeDocument, KnowledgeDocumentVersion, KnowledgeIndexRun, LabelTask, LatencyRecord, LineageEvent, LLMInferenceEvent, LongitudinalComparison, MisclassificationReport, ModelDeployment, ModelRegistry, ModelRelease, Notification, OperationalCapa, PipelineRun, Prediction, ProtocolDefinition, RecoveryJob, ReviewPriorityRule, RoutingRule, SecurityEvent, Study, StudyAnalysis, StudyInstance, TestEvidence, TestExecution, TestRequirement, TestScenario, UserConsent, XrayAnalysis
 from app.schemas import AgentActionIn, AgentChatIn, AgentFeedbackIn, CodeMappingIn, ConsentIn, IntegratedReviewIn, MisclassificationReportIn, PredictionOut, ProtocolIn, ReviewUpdate, RoutingRuleIn, StudyTagsIn, ValidationOut
 from app.services.dicom_service import metadata_orientation
 from app.services.file_validation import validate_upload
@@ -877,6 +877,72 @@ def create_capa(body: dict, request: Request, x_role: str|None=Header(None), db:
 def imaging_hub_route(body: dict):
     modality=str(body.get("modality","")).upper();route={"DX":"XRAY_API","CR":"XRAY_API","MR":"MRI_ADAPTER","CT":"UNSUPPORTED_QUEUE","US":"UNSUPPORTED_QUEUE"}.get(modality,"UNSUPPORTED_QUEUE")
     return {"modality":modality or "UNKNOWN","route":route,"adapter_contract":{"input_formats":["DICOM","NIFTI","PNG","JPEG"],"required_fields":["modality","study_id","series_id"],"shared_services":["deidentification","validation","job_status","audit","report_export"]},"external_call_performed":False}
+
+@app.post("/api/v1/agent/chat")
+def grounded_agent_chat(body:dict,request:Request,x_role:str|None=Header(None),x_user_id:str|None=Header(None),x_institution_id:str|None=Header(None),db:Session=Depends(get_db)):
+    from app.services.grounded_agent import run_grounded_agent
+    role=(x_role or "USER").upper();question=str(body.get("question",body.get("query","")))
+    if not question or len(question)>2000:raise HTTPException(422,"질문은 1~2,000자여야 합니다.")
+    request_id=request.headers.get("X-Request-ID",uuid.uuid4().hex);user_hash=file_digest((x_user_id or "anonymous").encode())[:24];institution=(x_institution_id or "DEMO")[:64]
+    conversation_id=body.get("conversation_id");conversation=db.get(AgentConversation,conversation_id) if conversation_id else None
+    if not conversation:conversation=AgentConversation(anonymous_user_id=user_hash,institution_id=institution);db.add(conversation);db.flush()
+    masked,phi=mask_sensitive(question);db.add(AgentMessage(conversation_id=conversation.id,role="user",masked_content="[MESSAGE_WITH_PHI_MASKED]" if phi else masked))
+    result=run_grounded_agent(question,body.get("analysis_id"),role,institution,request_id,db);answer=result.get("answer") or {"summary":"승인된 근거가 없어 답변을 생성하지 않았습니다." if result.get("response_status")=="NO_EVIDENCE" else "업무지원 언어모델을 사용할 수 없습니다.","recommended_review_steps":[],"evidence":[],"limitations":[result.get("error") or result.get("response_status")],"requires_human_review":True,"answer_type":"WORKFLOW_SUPPORT"}
+    row=AgentRun(request_id=request_id,anonymous_user_id=user_hash,user_role=role,masked_query="[MESSAGE_WITH_PHI_MASKED]" if phi else masked,selected_agent="Grounded Medical Workflow Agent",tool_calls=result.get("tool_calls",[]),document_ids=[x.get("document_id") for x in result.get("selected_documents",[])],answer=answer["summary"],safety_result={"flags":result.get("safety_flags",[]),"response_status":result.get("response_status")},trace={"nodes":result.get("trace",[]),"total_duration_ms":result.get("total_latency_ms"),"retrieval_mode":result.get("retrieval_mode","NOT_RUN"),"prompt_template_version":result.get("prompt_template_version")},provider=(result.get("llm_response") or {}).get("provider",settings.llm_provider),model=(result.get("llm_response") or {}).get("model_name",settings.llm_model_name));db.add(row);db.flush()
+    for item in result.get("selected_documents",[]):db.add(AgentRetrievalEvent(run_id=row.id,document_id=item["document_id"],chunk_id=item["chunk_id"],bm25_rank=item.get("bm25_rank"),vector_rank=item.get("vector_rank"),rrf_score=item.get("rrf_score",0),selected=True))
+    llm=result.get("llm_response")
+    if llm:db.add(LLMInferenceEvent(run_id=row.id,provider=llm["provider"],model_name=llm["model_name"],model_version=llm["model_version"],prompt_template_version=result["prompt_template_version"],prompt_tokens=llm["prompt_tokens"],completion_tokens=llm["completion_tokens"],latency_ms=llm["latency_ms"],finish_reason=llm["finish_reason"],dummy_mode=llm["dummy_mode"]))
+    db.add(AgentMessage(conversation_id=conversation.id,role="assistant",masked_content=answer["summary"]));record_audit(db,action="GROUNDED_AGENT_RUN",target_id=row.id,request_id=request_id,after={"status":result.get("response_status"),"retrieval_mode":result.get("retrieval_mode")},actor_role=role);db.commit()
+    return {"answer":answer,"evidence":result.get("selected_documents",[]),"model":{"provider":llm["provider"] if llm else settings.llm_provider,"name":llm["model_name"] if llm else settings.llm_model_name,"dummy_mode":llm["dummy_mode"] if llm else settings.llm_provider=="dummy"},"retrieval":{"mode":result.get("retrieval_mode","NOT_RUN"),"count":len(result.get("selected_documents",[]))},"trace_id":row.id,"conversation_id":conversation.id,"response_status":result.get("response_status"),"limitations":answer["limitations"],"requires_human_review":True,"diagnostic_use":False}
+
+@app.get("/api/v1/agent/runs/{trace_id}")
+def grounded_agent_run(trace_id:str,x_role:str|None=Header(None),db:Session=Depends(get_db)):
+    require_role(x_role,{"RADIOLOGIST","REVIEWER","QA_RA","ADMIN"});row=db.get(AgentRun,trace_id)
+    if not row:raise HTTPException(404,"Agent Trace를 찾을 수 없습니다.")
+    events=db.scalars(select(AgentRetrievalEvent).where(AgentRetrievalEvent.run_id==trace_id)).all();return {"trace_id":row.id,"request_id":row.request_id,"role":row.user_role,"masked_query":row.masked_query,"response_status":row.safety_result.get("response_status"),"model":{"provider":row.provider,"name":row.model},"retrieval":[{"document_id":x.document_id,"chunk_id":x.chunk_id,"bm25_rank":x.bm25_rank,"vector_rank":x.vector_rank,"rrf_score":x.rrf_score,"selected":x.selected} for x in events],"trace":row.trace,"safety":row.safety_result,"created_at":row.created_at}
+
+@app.get("/api/v1/retrieval/search")
+def retrieval_search(q:str,role:str="ADMIN",institution_id:str="DEMO",x_role:str|None=Header(None)):
+    require_role(x_role,{"ADMIN"});from app.services.retrieval import HybridRetriever
+    return HybridRetriever().search(q,role.upper(),institution_id)
+
+@app.post("/api/v1/admin/knowledge/index")
+def index_knowledge(request:Request,x_role:str|None=Header(None),db:Session=Depends(get_db)):
+    role=require_role(x_role,{"ADMIN","QA_RA"});from app.services.retrieval.document_ingestion import load_documents,qdrant_points
+    from app.services.retrieval.qdrant_store import QdrantStore
+    chunks,errors=load_documents();indexed=0;skipped=0
+    for c in chunks:
+        if db.scalar(select(KnowledgeChunk).where(KnowledgeChunk.content_hash==c["content_hash"])):skipped+=1;continue
+        doc=db.scalar(select(KnowledgeDocument).where(KnowledgeDocument.document_id==c["document_id"]))
+        if not doc:db.add(KnowledgeDocument(document_id=c["document_id"],title=c["title"],document_type=c["document_type"],institution_id=c["institution_id"]));db.flush()
+        version=db.scalar(select(KnowledgeDocumentVersion).where(KnowledgeDocumentVersion.document_id==c["document_id"],KnowledgeDocumentVersion.version==c["version"]))
+        if not version:db.add(KnowledgeDocumentVersion(document_id=c["document_id"],version=c["version"],approval_status=c["approval_status"],effective_date=c["effective_date"],expires_at=c.get("expires_at") or None,allowed_roles=c["allowed_roles"],content_hash=c["content_hash"],search_enabled=True))
+        db.add(KnowledgeChunk(document_id=c["document_id"],version=c["version"],chunk_id=c["chunk_id"],content_hash=c["content_hash"],embedding_model=c["embedding_model"],section=c["section"]));indexed+=1
+    mode="QDRANT";
+    try:QdrantStore().upsert(qdrant_points(chunks))
+    except Exception:mode="LOCAL_FALLBACK"
+    run=KnowledgeIndexRun(status="COMPLETED" if not errors else "PARTIAL",indexed_count=indexed,skipped_count=skipped,failed_documents=errors,retrieval_mode=mode);db.add(run);record_audit(db,action="KNOWLEDGE_INDEXED",target_id=run.id,request_id=request.headers.get("X-Request-ID","generated"),after={"indexed":indexed,"skipped":skipped,"mode":mode},actor_role=role);db.commit();return {"index_run_id":run.id,"status":run.status,"indexed":indexed,"skipped_duplicates":skipped,"failed_documents":errors,"retrieval_mode":mode}
+
+@app.get("/api/v1/admin/knowledge/documents")
+def knowledge_documents(x_role:str|None=Header(None),db:Session=Depends(get_db)):
+    require_role(x_role,{"ADMIN","QA_RA"});rows=db.scalars(select(KnowledgeDocumentVersion)).all();return [{"document_id":x.document_id,"version":x.version,"approval_status":x.approval_status,"effective_date":x.effective_date,"expires_at":x.expires_at,"allowed_roles":x.allowed_roles,"content_hash":x.content_hash,"search_enabled":x.search_enabled} for x in rows]
+
+@app.delete("/api/v1/admin/knowledge/documents/{document_id}/versions/{version}")
+def disable_knowledge(document_id:str,version:str,body:dict,request:Request,x_role:str|None=Header(None),db:Session=Depends(get_db)):
+    role=require_role(x_role,{"ADMIN","QA_RA"});reason=str(body.get("reason",""))
+    if not reason:raise HTTPException(422,"검색 비활성화 변경 사유가 필요합니다.")
+    row=db.scalar(select(KnowledgeDocumentVersion).where(KnowledgeDocumentVersion.document_id==document_id,KnowledgeDocumentVersion.version==version))
+    if not row:raise HTTPException(404,"문서 버전을 찾을 수 없습니다.")
+    row.search_enabled=False;record_audit(db,action="KNOWLEDGE_VERSION_DISABLED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),after={"document_id":document_id,"version":version,"reason":reason},actor_role=role);db.commit();return {"document_id":document_id,"version":version,"search_enabled":False,"physically_deleted":False}
+
+@app.get("/api/v1/admin/qdrant/status")
+def qdrant_status(x_role:str|None=Header(None),db:Session=Depends(get_db)):
+    require_role(x_role,{"ADMIN","QA_RA"});from app.services.retrieval.qdrant_store import QdrantStore
+    status=QdrantStore().status();last=db.scalar(select(KnowledgeIndexRun).order_by(KnowledgeIndexRun.created_at.desc()));return status|{"collection":settings.qdrant_collection,"embedding_model":settings.embedding_model,"last_indexed_at":last.created_at if last else None,"sensitive_url_exposed":False}
+
+@app.get("/api/v1/admin/llm/status")
+def llm_status(x_role:str|None=Header(None),db:Session=Depends(get_db)):
+    require_role(x_role,{"ADMIN","QA_RA"});last=db.scalar(select(LLMInferenceEvent).order_by(LLMInferenceEvent.created_at.desc()));return {"provider":settings.llm_provider,"model_name":settings.llm_model if settings.llm_provider=="dummy" else settings.llm_model_name,"connection_status":"READY" if settings.llm_provider=="dummy" else "CONFIGURED_NOT_PROBED","dummy_mode":settings.llm_provider=="dummy","last_latency_ms":last.latency_ms if last else None,"api_key_exposed":False,"base_url_exposed":False}
 
 @app.post("/api/agent/chat")
 def agent_chat(body: AgentChatIn, request: Request, x_role: str|None=Header(None), x_user_id: str|None=Header(None), db: Session=Depends(get_db)):
