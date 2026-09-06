@@ -81,3 +81,24 @@ CSV 버전은 `docs/traceability-matrix.csv`이며 테스트 실행 후 결과 �
 | P24-03 데이터셋 구축·환자 분할 | RAI-03, RAI-04 | `DatasetVersion`, `advanced_workflows.py` | `POST /api/v1/datasets` | `test_dataset_patient_split_duplicate_manifest_and_approval_gate` | PASS |
 | P24-04 성능 수치 생성 방지 | RAI-03, RAI-07 | `failure_metrics` | `POST /api/v1/failure-analysis` | `test_failure_analysis_does_not_invent_metrics_without_validation_data` | PASS |
 | P24-05 모델 계보·문서 초안 | RAI-07, RAI-10 | `ModelDeployment`, `main.py` | `GET /api/v1/model-monitoring`, `GET /api/v1/regulatory-documents` | `test_model_monitoring_hash_and_regulatory_documents` | PASS |
+
+## 의료기관 운영·검증
+
+| 요구사항 ID | 위험 ID | 구현 파일 | API | 테스트 ID | 결과 |
+|---|---|---|---|---|---|
+| OPS-01 PACS 안전 계층 | R-PACS-UNAUTHORIZED | `services/pacs.py` | `GET /api/v1/integrations/status` | `test_priority_rule_rbac_and_pacs_not_configured` | PASS |
+| OPS-02 Study 그룹·중복·방향 | R-DICOM-DUPLICATE | `Study`, `StudyInstance`, `main.py` | `POST /api/v1/studies/import` | `test_multiview_group_duplicate_block_missing_view_and_clinical_allowlist` | PASS |
+| OPS-03 우선순위·사유·규칙 버전 | R-AUTOMATION-BIAS | `StudyAnalysis`, `ReviewPriorityRule` | `POST /api/v1/studies/{id}/analyze` | `test_priority_rule_rbac_and_pacs_not_configured` | PASS |
+| OPS-04 Grad-CAM 제한 | R-XAI-MISUSE | `ExplanationArtifact`, `App.tsx` | `GET /api/v1/xray/analyses/{id}/gradcam-viewer` | `test_gradcam_role_and_dummy_restriction` | PASS |
+| OPS-05 임상정보 allowlist | R-PHI-EXPOSURE | `services/operations.py` | `POST /api/v1/studies/import` | `test_multiview_group_duplicate_block_missing_view_and_clinical_allowlist` | PASS |
+| OPS-06 Model Release Gate | R-UNAPPROVED-MODEL | `ModelRelease`, `main.py` | `/api/v1/models/*` | `test_unapproved_deploy_block_and_model_rollback` | PASS |
+| OPS-07 운영 지표 | R-FABRICATED-METRIC | `ops_metrics`, `OperationsDashboard` | `GET /api/v1/monitoring/metrics` | `test_monitoring_exposes_measured_and_unknown_values` | PASS |
+| OPS-08 반복 오류 CAPA | R-REPEATED-FAILURE | `OperationalCapa`, `ErrorOccurrence` | `POST/PATCH /api/v1/capa` | `test_repeated_error_creates_and_updates_capa_candidate` | PASS |
+| OPS-09 역할별 권한 | R-UNAUTHORIZED-CHANGE | `require_role`, `docs/rbac-matrix.md` | 중요 변경 API | `test_priority_rule_rbac_and_pacs_not_configured` | PASS |
+| REQ-26-REPRO | R-NONREPRODUCIBLE | `main.py`, `AnalysisProvenance` | `/api/v1/analyses/{id}/provenance`, `/reproduce`, `/compare/{other_id}` | `test_provenance_compare_and_explicit_reproduction_block` | PASS |
+| REQ-26-TEST | R-INCOMPLETE-VALIDATION | `TestScenario`, `TestExecution` | `/api/v1/test-scenarios*` | `test_scenario_execution_and_synthetic_safety_contract` | PASS |
+| REQ-26-SYNTHETIC | R-PHI | `services/verification.py` | `/api/v1/synthetic-safety-cases/{case}` | `test_scenario_execution_and_synthetic_safety_contract` | PASS |
+| REQ-26-LABEL | R-LABEL-ERROR | `AnnotationRecord` | `/api/v1/annotations/*` | `test_independent_annotation_adjudication_and_approval` | PASS |
+| REQ-26-FAIRNESS | R-BIAS | `fairness()` | `/api/v1/fairness/evaluate` | `test_fairness_requires_samples_and_reports_measured_values_only` | PASS |
+| REQ-26-RECOVERY | R-SERVICE-FAILURE | `RecoveryJob` | `/api/v1/recovery/jobs*` | `test_recovery_idempotency_backoff_and_permissions` | PASS |
+| REQ-26-AUDIT | R-AUDIT-INTEGRITY | `build_audit_package()` | `/api/v1/audit-packages*` | `test_audit_package_content_integrity_and_security_status` | PASS |

@@ -10,6 +10,6 @@ describe('integrated xray analysis',()=>{
     vi.stubGlobal('fetch',vi.fn(async(input:string|URL|Request)=>({ok:true,json:async()=>String(input).includes('/api/predictions')?[]:result})));
     vi.stubGlobal('URL',{...URL,createObjectURL:()=>"blob:synthetic"});
     render(<App/>);fireEvent.click(screen.getByRole('button',{name:'통합 X-ray 분석'}));
-    const input=screen.getByLabelText(/PNG, JPG 또는 DICOM 선택/,{selector:'input'});const start=screen.getByRole('button',{name:'통합 분석 시작'});expect(start).toBeDisabled();fireEvent.change(input,{target:{files:[new File(['x'],'x.png',{type:'image/png'})]}});await waitFor(()=>expect(start).toBeEnabled());expect(screen.getByText('x.png')).toBeInTheDocument();expect(screen.getByText(/파일 검증 → 비식별화/)).toBeInTheDocument();
+    const input=screen.getByLabelText(/PNG, JPG 또는 DICOM 선택/,{selector:'input'});const start=screen.getByRole('button',{name:'통합 분석 시작'});expect(start).toBeDisabled();fireEvent.change(input,{target:{files:[new File(['x'],'x.png',{type:'image/png'})]}});await waitFor(()=>expect(start).toBeEnabled());expect(screen.getByText('x.png')).toBeInTheDocument();expect(screen.getByText(/파일 검증 → 비식별화/)).toBeInTheDocument();fireEvent.click(start);await waitFor(()=>expect(screen.getByText('Grad-CAM Viewer')).toBeInTheDocument());expect(screen.getByText(/설명 가능성 시각화는 진단 근거가 아닙니다/)).toBeInTheDocument();expect(screen.getByLabelText('히트맵 투명도')).toBeDisabled();
   });
 });

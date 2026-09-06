@@ -1,7 +1,7 @@
-import base64, csv, logging, time, uuid, zipfile
+import base64, csv, json, logging, time, uuid, zipfile
 from io import BytesIO
 from datetime import datetime, timezone
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from sqlalchemy import func, select
@@ -12,7 +12,7 @@ from app.core.constants import REGIONS
 from app.core.logging import configure_logging
 from app.core.rate_limit import SlidingWindowLimiter
 from app.db.database import Base, engine, get_db
-from app.db.models import AIRisk, ActiveLearningCandidate, AgentActionProposal, AgentFeedback, AgentRun, AuditEvent, Capa, ClinicalReview, CodeMapping, DatasetVersion, Defect, ExplanationArtifact, FeatureFlag, FindingPredictionRecord, IntegrationEvent, LabelTask, LatencyRecord, LineageEvent, LongitudinalComparison, MisclassificationReport, ModelDeployment, ModelRegistry, Notification, PipelineRun, Prediction, ProtocolDefinition, RoutingRule, Study, StudyInstance, UserConsent, XrayAnalysis
+from app.db.models import AIRisk, ActiveLearningCandidate, AgentActionProposal, AgentFeedback, AgentRun, AnalysisProvenance, AnnotationRecord, AuditEvent, AuditPackage, Capa, ClinicalReview, CodeMapping, DatasetVersion, Defect, DefectRecord, ErrorOccurrence, ExplanationArtifact, FeatureFlag, FindingPredictionRecord, IntegrationEvent, LabelTask, LatencyRecord, LineageEvent, LongitudinalComparison, MisclassificationReport, ModelDeployment, ModelRegistry, ModelRelease, Notification, OperationalCapa, PipelineRun, Prediction, ProtocolDefinition, RecoveryJob, ReviewPriorityRule, RoutingRule, SecurityEvent, Study, StudyAnalysis, StudyInstance, TestEvidence, TestExecution, TestRequirement, TestScenario, UserConsent, XrayAnalysis
 from app.schemas import AgentActionIn, AgentChatIn, AgentFeedbackIn, CodeMappingIn, ConsentIn, IntegratedReviewIn, MisclassificationReportIn, PredictionOut, ProtocolIn, ReviewUpdate, RoutingRuleIn, StudyTagsIn, ValidationOut
 from app.services.dicom_service import metadata_orientation
 from app.services.file_validation import validate_upload
@@ -27,6 +27,8 @@ from app.services.advanced_ai import detection_interface, landmark_interface, pr
 from app.services.medical_agent import mask_sensitive, run_agent
 from app.services.responsible_ai import CONSENT_ITEMS, CONSENT_VERSION, DATASET_CARDS, GLOSSARY, MODEL_CARDS, REPORT_TYPES, RISKS, confidence_explanation, percentile
 from app.services.advanced_workflows import DISCLAIMER as RESEARCH_DISCLAIMER, build_manifest, comparison_compatibility, failure_metrics
+from app.services.operations import DEFAULT_THRESHOLDS, priority_decision, validate_clinical_context
+from app.services.pacs import integration_status
 from xray_findings import FindingInferenceEngine
 from xray_findings.postprocess import near_threshold
 
@@ -37,6 +39,8 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI(title=settings.app_name, version="0.1.0", description="연구·교육용 영상 분류 API이며 진단용이 아닙니다.")
 app.add_middleware(CORSMiddleware, allow_origins=[x.strip() for x in settings.cors_origins.split(",")], allow_credentials=True, allow_methods=["*"] ,allow_headers=["*"])
 finding_engine=FindingInferenceEngine()
+ops_metrics={"requests":0,"errors":0,"recent_errors":[]}
+ops_metrics={"requests":0,"errors":0,"recent_errors":[]}
 @app.on_event("startup")
 def startup():
     Base.metadata.create_all(bind=engine)
@@ -48,6 +52,7 @@ def startup():
             if not db.get(FeatureFlag,key): db.add(FeatureFlag(key=key,enabled=key in {"ENABLE_DICOM_SR","ENABLE_FHIR","ENABLE_REPORT_EXPORT"}))
         for risk_id,name,control,test,owner,residual in RISKS:
             if not db.get(AIRisk,risk_id): db.add(AIRisk(id=risk_id,name=name,control=control,verification_test=test,owner=owner,residual_risk=residual))
+        if not db.scalar(select(ReviewPriorityRule).where(ReviewPriorityRule.active==True)):db.add(ReviewPriorityRule(version="1.0",thresholds=DEFAULT_THRESHOLDS,changed_by="system",change_reason="initial safe defaults"))
         db.commit()
 startup()
 
@@ -61,7 +66,9 @@ async def security(request: Request, call_next):
     client=request.client.host if request.client else "unknown"
     if request.url.path.startswith("/api/") and not limiter.allow(client):
         return JSONResponse(status_code=429,content={"error":{"code":"RATE_LIMITED","message":"요청이 너무 많습니다. 잠시 후 다시 시도하세요."}},headers={"Retry-After":"60","X-Request-ID":request_id})
-    started=time.perf_counter(); response=await call_next(request)
+    started=time.perf_counter(); response=await call_next(request);ops_metrics["requests"]+=1
+    if response.status_code>=400:
+        ops_metrics["errors"]+=1;ops_metrics["recent_errors"]=(ops_metrics["recent_errors"]+[{"path":request.url.path,"status":response.status_code,"at":datetime.now(timezone.utc).isoformat()}])[-20:]
     response.headers["X-Content-Type-Options"]="nosniff"; response.headers["X-Frame-Options"]="DENY"; response.headers["Referrer-Policy"]="no-referrer"; response.headers["Content-Security-Policy"]="default-src 'none'; frame-ancestors 'none'"; response.headers["X-Request-ID"]=request_id
     logger.info("request_completed",extra={"request_id":request_id,"status":response.status_code,"duration_ms":int((time.perf_counter()-started)*1000)})
     return response
@@ -136,7 +143,7 @@ def _run_integrated(data:bytes,filename:str,content_type:str,db:Session):
     review=bool(reasons);priority="HIGH" if status in ("QUALITY_REJECTED","OUT_OF_DISTRIBUTION") else "MEDIUM" if review else "LOW"
     entropy_info=uncertainty([x["confidence"] for x in top]);modality=str(getattr(v.dicom,"Modality","DX" if v.format!="DICOM" else "UNKNOWN"))
     row=XrayAnalysis(anonymous_hash=digest,modality=modality,is_dicom=v.dicom is not None,quality={"status":extended.quality_status,"score":extended.quality_score,"issues":list(extended.quality_reasons)},region_result={"code":top[0]["class"],"display_name":REGIONS[top[0]["class"]],"confidence":top[0]["confidence"],"top_predictions":top},screening_status=status,uncertainty={"entropy":entropy_info["predictive_entropy"],"ood_status":extended.distribution_status},routing={"review_required":review,"priority":priority,"reasons":reasons},model_info={"region_model_version":settings.model_version,"finding_model_version":finding_result.model_version,"finding_model_name":finding_result.model_name,"checkpoint_hash":finding_result.checkpoint_hash,"dummy_mode":True})
-    db.add(row);db.flush();records=[]
+    db.add(row);db.flush();db.add(AnalysisProvenance(analysis_id=row.id,input_sha256=digest,raw_input_retained=False,manifest={"input_sha256":digest,"preprocessing_pipeline_version":"grayscale-normalize-v1","preprocessing_config":{"color_mode":"L","resize":"model-managed"},"region_model_version":settings.model_version,"finding_model_version":finding_result.model_version,"checkpoint_sha256":finding_result.checkpoint_hash,"dataset_version":"UNSPECIFIED","threshold_version":"finding-thresholds-v1","routing_rule_version":"integrated-routing-v1","application_version":app.version,"executed_at":datetime.now(timezone.utc).isoformat(),"environment":settings.environment,"random_seed":42}));records=[]
     for x in finding_rows:
         record=FindingPredictionRecord(analysis_id=row.id,code=x.code,display_name=x.display_name,probability=x.probability,threshold=x.threshold,positive=x.positive);db.add(record);records.append(record)
     db.add(ExplanationArtifact(analysis_id=row.id,artifact_type="GRAD_CAM",available=False));db.commit();return _integrated_payload(row,records)
@@ -264,6 +271,299 @@ def regulatory_document(document_id:str):
     if document_id not in allowed:raise HTTPException(404,"문서를 찾을 수 없습니다.")
     content=f"# {allowed[document_id]}\n\n상태: 자동 생성 초안 / 승인 전 사용 금지\n\n- 시스템: X-ray 연구·교육용 분석 지원\n- 성능: NOT_MEASURED (실제 검증 데이터 없음)\n- 사람 검토: 필수\n- 생성 시각: {datetime.now(timezone.utc).isoformat()}\n\n{RESEARCH_DISCLAIMER}\n"
     return Response(content,media_type="text/markdown",headers={"Content-Disposition":f"attachment; filename={document_id}.md"})
+
+@app.get("/api/v1/integrations/status")
+def integrations_status():
+    from app.services.pacs import integration_status
+    return {**integration_status(),"database":"UP","model":"DUMMY_READY" if settings.dummy_mode else "CONFIGURED","queue":"LOCAL_ONLY"}
+
+@app.get("/api/v1/analyses/{analysis_id}/provenance")
+def analysis_provenance(analysis_id:str,db:Session=Depends(get_db)):
+    row=db.get(AnalysisProvenance,analysis_id)
+    if not row:raise HTTPException(404,"분석 provenance를 찾을 수 없습니다.")
+    return {"analysis_id":analysis_id,**row.manifest,"raw_input_retained":row.raw_input_retained}
+
+@app.post("/api/v1/analyses/{analysis_id}/reproduce")
+def reproduce_analysis(analysis_id:str,request:Request,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    role=require_role(x_role,{"ML_ENGINEER","QA_RA","ADMIN"});row=db.get(AnalysisProvenance,analysis_id)
+    if not row:raise HTTPException(404,"분석 provenance를 찾을 수 없습니다.")
+    if not row.raw_input_retained:
+        record_audit(db,action="ANALYSIS_REPRODUCE_BLOCKED",target_id=analysis_id,request_id=request.headers.get("X-Request-ID","generated"),after={"reason":"RAW_INPUT_NOT_RETAINED"},actor_role=role);db.commit();raise HTTPException(409,"RAW_INPUT_NOT_RETAINED: 개인정보 보호 정책에 따라 원본 영상이 보존되지 않아 재현할 수 없습니다.")
+    return {"status":"QUEUED"}
+
+@app.get("/api/v1/analyses/{analysis_id}/compare/{other_id}")
+def compare_analyses(analysis_id:str,other_id:str,db:Session=Depends(get_db)):
+    first,second=db.get(XrayAnalysis,analysis_id),db.get(XrayAnalysis,other_id)
+    if not first or not second:raise HTTPException(404,"비교할 분석을 찾을 수 없습니다.")
+    p1,p2=db.get(AnalysisProvenance,analysis_id),db.get(AnalysisProvenance,other_id);f=lambda i:{x.code:round(x.probability,6) for x in db.scalars(select(FindingPredictionRecord).where(FindingPredictionRecord.analysis_id==i)).all()}
+    stable={"preprocessing_pipeline_version","preprocessing_settings","anatomical_region_model_version","finding_model_version","model_checkpoint_sha256","dataset_version","finding_threshold_version","routing_rule_version","application_version","execution_environment","random_seed"}
+    same_settings=bool(p1 and p2 and all(p1.manifest.get(k)==p2.manifest.get(k) for k in stable));a,b=f(analysis_id),f(other_id);return {"same_input":bool(p1 and p2 and p1.input_sha256==p2.input_sha256),"same_settings":same_settings,"region":{"first":first.region_result["code"],"second":second.region_result["code"],"changed":first.region_result["code"]!=second.region_result["code"]},"finding_probability_deltas":{k:round(b.get(k,0)-a.get(k,0),6) for k in sorted(set(a)|set(b))},"review_required":True,"disclaimer":RESEARCH_DISCLAIMER}
+
+@app.post("/api/v1/test-requirements")
+def create_test_requirement(body:dict,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    require_role(x_role,{"QA_RA","ADMIN"});row=TestRequirement(requirement_id=body.get("requirement_id"),risk_ids=body.get("risk_ids",[]),title=body.get("title",""));db.add(row);db.commit();return {"id":row.id,"requirement_id":row.requirement_id}
+
+@app.post("/api/v1/test-scenarios")
+def create_test_scenario(body:dict,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    require_role(x_role,{"QA_RA","ADMIN"});types={"NORMAL","BOUNDARY","NEGATIVE","SECURITY","PERFORMANCE","RECOVERY","USABILITY"}
+    if body.get("scenario_type") not in types:raise HTTPException(422,"지원하지 않는 시험 유형입니다.")
+    row=TestScenario(test_id=body.get("test_id"),requirement_id=body.get("requirement_id"),risk_ids=body.get("risk_ids",[]),scenario_type=body["scenario_type"],preconditions=body.get("preconditions",""),input_data=body.get("input_data",{}),steps=body.get("steps",[]),expected_result=body.get("expected_result",""));db.add(row);db.commit();return {"scenario_id":row.id,"test_id":row.test_id}
+
+@app.post("/api/v1/test-scenarios/{scenario_id}/executions")
+def execute_test_scenario(scenario_id:str,body:dict,request:Request,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    role=require_role(x_role,{"QA_RA","ADMIN"});scenario=db.get(TestScenario,scenario_id);status=body.get("status")
+    if not scenario:raise HTTPException(404,"시험 시나리오를 찾을 수 없습니다.")
+    if status not in {"PASS","FAIL","BLOCKED"}:raise HTTPException(422,"시험 결과 상태가 올바르지 않습니다.")
+    row=TestExecution(scenario_id=scenario.id,actual_result=body.get("actual_result",""),status=status,tester=body.get("tester","UNKNOWN"),retest_of=body.get("retest_of"));db.add(row);db.flush()
+    for item in body.get("evidence",[]):db.add(TestEvidence(execution_id=row.id,filename=item.get("filename","evidence"),sha256=item.get("sha256",""),storage_status="METADATA_ONLY"))
+    if status=="FAIL":db.add(DefectRecord(execution_id=row.id,summary=body.get("defect_summary","시험 실패")))
+    record_audit(db,action="TEST_EXECUTED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),after={"test_id":scenario.test_id,"status":status},actor_role=role);db.commit();return {"execution_id":row.id,"status":row.status,"defect_created":status=="FAIL"}
+
+@app.get("/api/v1/test-scenarios")
+def list_test_scenarios(db:Session=Depends(get_db)):
+    rows=db.scalars(select(TestScenario)).all();return [{"scenario_id":x.id,"test_id":x.test_id,"requirement_id":x.requirement_id,"risk_ids":x.risk_ids,"scenario_type":x.scenario_type,"preconditions":x.preconditions,"input_data":x.input_data,"steps":x.steps,"expected_result":x.expected_result} for x in rows]
+
+@app.get("/api/v1/synthetic-safety-cases")
+def list_safety_cases():
+    from app.services.verification import SAFETY_CASES
+    return [{"case":k,"expected_quality_status":v[0],"expected_review_required":v[1],"expected_error_code":v[2],"synthetic":True} for k,v in SAFETY_CASES.items()]
+
+@app.post("/api/v1/synthetic-safety-cases/{case_name}")
+def generate_safety_case(case_name:str):
+    from app.services.verification import safety_case
+    try:item=safety_case(case_name)
+    except ValueError as exc:raise HTTPException(404,str(exc))
+    headers={"X-Synthetic-Test-Case":item["case"],"X-Expected-Quality":item["expected_quality_status"],"X-Expected-Review":str(item["expected_review_required"]).lower(),"X-Expected-Error":item["expected_error_code"] or "NONE"};return Response(item["dicom"],media_type="application/dicom",headers=headers)
+
+@app.post("/api/v1/annotations")
+def create_annotation(body:dict,x_role:str|None=Header(default=None,alias="X-Role"),x_actor:str|None=Header(default=None,alias="X-Actor"),db:Session=Depends(get_db)):
+    role=require_role(x_role,{"LABELER","RADIOLOGIST"});image_hash=str(body.get("anonymous_image_hash","")).lower()
+    if len(image_hash)!=64:raise HTTPException(422,"익명 영상 SHA-256이 필요합니다.")
+    review={"reviewer":x_actor or "anonymous","role":role,"region":body.get("region"),"findings":body.get("findings",[]),"at":datetime.now(timezone.utc).isoformat()};row=AnnotationRecord(anonymous_image_hash=image_hash,first_review=review,history=[{"action":"FIRST_REVIEW","after":review}]);db.add(row);db.commit();return {"annotation_id":row.id,"status":row.status,"training_eligible":False}
+
+@app.post("/api/v1/annotations/{annotation_id}/second-review")
+def second_annotation(annotation_id:str,body:dict,x_role:str|None=Header(default=None,alias="X-Role"),x_actor:str|None=Header(default=None,alias="X-Actor"),db:Session=Depends(get_db)):
+    role=require_role(x_role,{"RADIOLOGIST"});row=db.get(AnnotationRecord,annotation_id)
+    if not row:raise HTTPException(404,"라벨 작업을 찾을 수 없습니다.")
+    reviewer=x_actor or "anonymous-radiologist"
+    if reviewer==row.first_review.get("reviewer"):raise HTTPException(409,"두 번째 판독자는 첫 번째 판독자와 달라야 합니다.")
+    review={"reviewer":reviewer,"role":role,"region":body.get("region"),"findings":body.get("findings",[]),"at":datetime.now(timezone.utc).isoformat()};row.second_review=review;agreed=review["region"]==row.first_review.get("region") and sorted(review["findings"])==sorted(row.first_review.get("findings",[]));row.status="AGREED" if agreed else "DISAGREEMENT";row.history=list(row.history)+[{"action":"SECOND_REVIEW","before":row.first_review,"after":review,"agreed":agreed}];db.commit();return {"annotation_id":row.id,"status":row.status,"agreement":agreed,"training_eligible":False}
+
+@app.post("/api/v1/annotations/{annotation_id}/adjudicate")
+def adjudicate_annotation(annotation_id:str,body:dict,x_role:str|None=Header(default=None,alias="X-Role"),x_actor:str|None=Header(default=None,alias="X-Actor"),db:Session=Depends(get_db)):
+    require_role(x_role,{"ADJUDICATOR"});row=db.get(AnnotationRecord,annotation_id)
+    if not row or not row.second_review:raise HTTPException(409,"독립 2차 판독 완료 후 합의 판독할 수 있습니다.")
+    result={"reviewer":x_actor or "adjudicator","region":body.get("region"),"findings":body.get("findings",[]),"reason":body.get("reason",""),"at":datetime.now(timezone.utc).isoformat()};row.adjudication=result;row.status="ADJUDICATED";row.history=list(row.history)+[{"action":"ADJUDICATED","after":result}];db.commit();return {"annotation_id":row.id,"status":row.status,"training_eligible":False}
+
+@app.post("/api/v1/annotations/{annotation_id}/approve")
+def approve_annotation(annotation_id:str,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    require_role(x_role,{"ADJUDICATOR"});row=db.get(AnnotationRecord,annotation_id)
+    if not row or row.status not in {"AGREED","ADJUDICATED"}:raise HTTPException(409,"합의 또는 합의 판독 완료 후 승인할 수 있습니다.")
+    row.final_label=row.adjudication or row.second_review;row.status="APPROVED";row.history=list(row.history)+[{"action":"APPROVED","after":row.final_label}];db.commit();return {"annotation_id":row.id,"status":row.status,"training_eligible":True}
+
+@app.get("/api/v1/annotations/agreement")
+def annotation_agreement(db:Session=Depends(get_db)):
+    rows=db.scalars(select(AnnotationRecord).where(AnnotationRecord.second_review.is_not(None))).all();total=len(rows);region=sum(x.first_review.get("region")==x.second_review.get("region") for x in rows);finding=sum(sorted(x.first_review.get("findings",[]))==sorted(x.second_review.get("findings",[])) for x in rows);return {"sample_size":total,"region_agreement":region/total if total else None,"finding_agreement":finding/total if total else None,"status":"MEASURED" if total else "INSUFFICIENT_DATA"}
+
+@app.post("/api/v1/fairness/evaluate")
+def evaluate_fairness(body:dict,x_role:str|None=Header(default=None,alias="X-Role")):
+    require_role(x_role,{"ML_ENGINEER","QA_RA","ADMIN"});from app.services.verification import fairness
+    try:return fairness(body.get("validated_cases",[]),body.get("group_by","age_group"),int(body.get("min_samples",20)))
+    except ValueError as exc:raise HTTPException(422,str(exc))
+
+@app.post("/api/v1/recovery/jobs")
+def create_recovery_job(body:dict,request:Request,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    role=require_role(x_role,{"TECHNICIAN","RADIOLOGIST","ADMIN"});key=request.headers.get("Idempotency-Key") or body.get("idempotency_key")
+    if not key:raise HTTPException(422,"Idempotency-Key가 필요합니다.")
+    existing=db.scalar(select(RecoveryJob).where(RecoveryJob.idempotency_key==key))
+    if existing:return {"job_id":existing.id,"status":existing.status,"duplicate":True}
+    failure=body.get("simulate_failure");status="RETRY_PENDING" if failure in {"MODEL_TIMEOUT","MODEL_SERVER_DOWN","WORKER_INTERRUPTED"} else "QUARANTINED" if failure in {"DATABASE_FAILURE","PARTIAL_BATCH"} else "SUCCEEDED";row=RecoveryJob(idempotency_key=key,analysis_id=body.get("analysis_id"),status=status,attempts=1,max_attempts=min(5,int(body.get("max_attempts",3))),next_retry_seconds=2 if status=="RETRY_PENDING" else 0,failure_reason=failure,model_version=body.get("model_version",settings.model_version));db.add(row);db.flush();record_audit(db,action="RECOVERY_JOB_CREATED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),after={"status":status,"failure":failure},actor_role=role);db.commit();return {"job_id":row.id,"status":row.status,"attempts":row.attempts,"next_retry_seconds":row.next_retry_seconds,"duplicate":False,"routed_to_medical_review":failure=="MODEL_SERVER_DOWN"}
+
+@app.post("/api/v1/recovery/jobs/{job_id}/retry")
+def retry_recovery_job(job_id:str,body:dict,request:Request,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    role=require_role(x_role,{"ADMIN"});row=db.get(RecoveryJob,job_id)
+    if not row:raise HTTPException(404,"복구 작업을 찾을 수 없습니다.")
+    row.attempts+=1
+    if row.attempts>row.max_attempts:row.status="FAILED"
+    elif body.get("model_rollback_completed"):row.status="SUCCEEDED";row.failure_reason=None
+    else:row.status="RETRY_PENDING";row.next_retry_seconds=min(60,2**row.attempts)
+    record_audit(db,action="RECOVERY_JOB_RETRIED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),after={"status":row.status,"attempts":row.attempts},actor_role=role);db.commit();return {"job_id":row.id,"status":row.status,"attempts":row.attempts,"next_retry_seconds":row.next_retry_seconds}
+
+@app.get("/api/v1/recovery/jobs")
+def recovery_jobs(db:Session=Depends(get_db)):
+    rows=db.scalars(select(RecoveryJob).order_by(RecoveryJob.created_at.desc())).all();return [{"job_id":x.id,"status":x.status,"attempts":x.attempts,"max_attempts":x.max_attempts,"failure_reason":x.failure_reason,"next_retry_seconds":x.next_retry_seconds} for x in rows]
+
+@app.post("/api/v1/audit-packages")
+def create_audit_package(body:dict,request:Request,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    role=require_role(x_role,{"QA_RA","ADMIN"});from app.services.verification import build_audit_package,encode
+    payload,manifest=build_audit_package(role,body.get("versions",{}));digest=file_digest(payload);row=AuditPackage(created_by_role=role,manifest=manifest,payload_base64=encode(payload),package_sha256=digest);db.add(row);db.flush();record_audit(db,action="AUDIT_PACKAGE_CREATED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),after={"sha256":digest,"files":len(manifest["files"])+1},actor_role=role);db.commit();return {"package_id":row.id,"status":row.status,"package_sha256":digest,"manifest":manifest}
+
+@app.get("/api/v1/audit-packages/{package_id}")
+def get_audit_package(package_id:str,db:Session=Depends(get_db)):
+    from app.services.verification import decode
+    row=db.get(AuditPackage,package_id)
+    if not row:raise HTTPException(404,"감사 패키지를 찾을 수 없습니다.")
+    valid=file_digest(decode(row.payload_base64))==row.package_sha256;return {"package_id":row.id,"status":row.status if valid else "INTEGRITY_FAILED","integrity_valid":valid,"package_sha256":row.package_sha256,"manifest":row.manifest}
+
+@app.get("/api/v1/audit-packages/{package_id}/download")
+def download_audit_package(package_id:str,db:Session=Depends(get_db)):
+    from app.services.verification import decode
+    row=db.get(AuditPackage,package_id)
+    if not row:raise HTTPException(404,"감사 패키지를 찾을 수 없습니다.")
+    payload=decode(row.payload_base64)
+    if file_digest(payload)!=row.package_sha256:raise HTTPException(409,"INTEGRITY_FAILED: 생성 후 패키지 내용이 변경되었습니다.")
+    return Response(payload,media_type="application/zip",headers={"Content-Disposition":f"attachment; filename=audit-package-{row.id}.zip"})
+
+@app.get("/api/v1/security/status")
+def security_status():return {"upload_limits":{"max_mb":settings.max_upload_mb,"max_batch_files":20},"mime_signature_cross_check":True,"zip_path_traversal_blocked":True,"nested_zip_blocked":True,"malware_scanner":"NOT_CONFIGURED","malware_scan_completed":False,"secret_log_masking":True,"admin_reauthentication":"INTERFACE_REQUIRED_NOT_CONFIGURED"}
+
+@app.post("/api/v1/studies/import")
+async def import_study(request:Request,files:list[UploadFile]=File(...),clinical_context_json:str=Form("{}"),x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    role=require_role(x_role,{"TECHNICIAN","ADMIN"})
+    from app.services.operations import validate_clinical_context
+    try:context=validate_clinical_context(json.loads(clinical_context_json or "{}"))
+    except (ValueError,json.JSONDecodeError) as exc:raise HTTPException(422,str(exc))
+    if not files:raise HTTPException(422,"한 개 이상의 DICOM이 필요합니다.")
+    items=[];seen=set();study_hash=None
+    for upload in files:
+        data=await upload.read();meta=dicom_group_metadata(data)
+        if study_hash and meta["study_uid_hash"]!=study_hash:raise HTTPException(422,"서로 다른 StudyInstanceUID는 한 요청에서 가져올 수 없습니다.")
+        study_hash=meta["study_uid_hash"]
+        if meta["sop_uid_hash"] in seen or db.scalar(select(StudyInstance).where(StudyInstance.sop_uid_hash==meta["sop_uid_hash"])):raise HTTPException(409,"중복 SOPInstanceUID가 탐지되어 등록을 차단했습니다.")
+        seen.add(meta["sop_uid_hash"]);result=_run_integrated(data,upload.filename or "image.dcm",upload.content_type or "application/dicom",db);items.append((meta,result))
+    regions=[x[1]["anatomical_region"]["code"] for x in items];region=max(set(regions),key=regions.count);views=[x[0]["view_position"] for x in items];expected=["LATERAL",("PA_OR_AP" if region=="CHEST" else "AP")];missing=[]
+    if "LATERAL" not in views:missing.append("LATERAL")
+    if region=="CHEST" and not ({"PA","AP"}&set(views)):missing.append("PA_OR_AP")
+    elif region!="CHEST" and "AP" not in views:missing.append("AP")
+    protocol={"status":"MISSING_VIEW" if missing else "COMPLETE","required":expected,"missing":missing,"observed":sorted(set(views))}
+    study=Study(study_uid_hash=study_hash or file_digest(uuid.uuid4().bytes),anonymous_accession=items[0][0]["anonymous_accession"],study_date=items[0][0]["study_date"],region=region,protocol_status=protocol["status"],views=views,tags=[{"clinical_context":context,"source":"ALLOWLISTED_INPUT"}]);db.add(study);db.flush()
+    for meta,result in items:db.add(StudyInstance(study_id=study.id,series_uid_hash=meta["series_uid_hash"],sop_uid_hash=meta["sop_uid_hash"],series_number=meta["series_number"],instance_number=meta["instance_number"],view_position=meta["view_position"],laterality=meta["laterality"],prediction_id=result["analysis_id"]))
+    record_audit(db,action="STUDY_IMPORTED",target_id=study.id,request_id=request.headers.get("X-Request-ID","generated"),after={"instances":len(items),"protocol":protocol},actor_role=role);db.commit();return {"study_id":study.id,"study_uid_hash":study.study_uid_hash,"instance_count":len(items),"views":views,"protocol":protocol,"clinical_context":context,"external_transmission":False}
+
+@app.post("/api/v1/studies/{study_id}/analyze")
+def analyze_study(study_id:str,request:Request,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    role=require_role(x_role,{"TECHNICIAN","RADIOLOGIST","ADMIN"});study=db.get(Study,study_id)
+    if not study:raise HTTPException(404,"Study를 찾을 수 없습니다.")
+    instances=db.scalars(select(StudyInstance).where(StudyInstance.study_id==study.id)).all();results=[]
+    for item in instances:
+        analysis=db.get(XrayAnalysis,item.prediction_id) if item.prediction_id else None
+        if not analysis:continue
+        findings=db.scalars(select(FindingPredictionRecord).where(FindingPredictionRecord.analysis_id==analysis.id)).all();results.append({"instance_id":item.id,"view_position":item.view_position,"region":analysis.region_result["code"],"quality_status":analysis.quality["status"],"ood_status":analysis.uncertainty.get("ood_status","UNKNOWN"),"max_finding_probability":max([x.probability for x in findings] or [0]),"screening_status":analysis.screening_status})
+    rule=db.scalar(select(ReviewPriorityRule).where(ReviewPriorityRule.active==True).order_by(ReviewPriorityRule.created_at.desc()))
+    if not rule:rule=ReviewPriorityRule(version="1.0",thresholds={"high_priority_finding_probability":.8,"capa_repeat_count":3},changed_by="system");db.add(rule);db.flush()
+    from app.services.operations import priority_decision
+    decision=priority_decision(results,study.protocol_status,rule.thresholds);regions={x["region"] for x in results};aggregate={"region":next(iter(regions)) if len(regions)==1 else "CONFLICT","instance_count":len(results),"conflict":len(regions)>1,"emergency_diagnosis":False}
+    context=(study.tags[0].get("clinical_context",{}) if study.tags else {});combined={"used":any(v not in ("UNKNOWN",[],None) for v in context.values()),"effect":"우선순위나 AI 점수를 자동 변경하지 않고 의료진 참고정보로만 표시합니다."}
+    row=StudyAnalysis(study_id=study.id,instance_results=results,aggregate_result=aggregate,clinical_context=context,clinical_context_effect=combined,status=decision["status"],priority_reasons=decision["reasons"],priority_rule_version=rule.version);db.add(row);record_audit(db,action="STUDY_ANALYZED",target_id=study.id,request_id=request.headers.get("X-Request-ID","generated"),after={"status":row.status,"reasons":row.priority_reasons,"rule_version":rule.version},actor_role=role);db.commit();return {"analysis_id":row.id,"study_id":study.id,"instance_results":results,"study_result":aggregate,"priority":{"status":row.status,"reasons":row.priority_reasons,"rule_version":rule.version},"image_only_result":aggregate,"clinical_combined_result":{"result":aggregate,"context":context,"influence":combined},"disclaimer":"높은 우선순위는 응급 진단 확정이 아닌 의료진 우선 검토 요청입니다."}
+
+@app.get("/api/v1/studies/{study_id}")
+def get_study_v1(study_id:str,db:Session=Depends(get_db)):
+    study=db.get(Study,study_id)
+    if not study:raise HTTPException(404,"Study를 찾을 수 없습니다.")
+    instances=db.scalars(select(StudyInstance).where(StudyInstance.study_id==study.id)).all();latest=db.scalar(select(StudyAnalysis).where(StudyAnalysis.study_id==study.id).order_by(StudyAnalysis.created_at.desc()))
+    return {"study_id":study.id,"study_uid_hash":study.study_uid_hash,"region":study.region,"views":study.views,"protocol_status":study.protocol_status,"instances":[{"instance_id":x.id,"series_uid_hash":x.series_uid_hash,"sop_uid_hash":x.sop_uid_hash,"view_position":x.view_position,"analysis_id":x.prediction_id} for x in instances],"latest_analysis":None if not latest else {"analysis_id":latest.id,"status":latest.status,"reasons":latest.priority_reasons,"rule_version":latest.priority_rule_version}}
+
+@app.get("/api/v1/worklist")
+def study_worklist(status:str|None=None,db:Session=Depends(get_db)):
+    rows=db.scalars(select(StudyAnalysis).order_by(StudyAnalysis.created_at.desc())).all();return [{"worklist_id":x.id,"study_id":x.study_id,"status":x.status,"reasons":x.priority_reasons,"rule_version":x.priority_rule_version,"created_at":x.created_at} for x in rows if not status or x.status==status]
+
+@app.patch("/api/v1/worklist/{worklist_id}/priority")
+def change_worklist_priority(worklist_id:str,body:dict,request:Request,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    role=require_role(x_role,{"RADIOLOGIST","ADMIN"});row=db.get(StudyAnalysis,worklist_id);allowed={"ROUTINE","REVIEW_REQUIRED","HIGH_PRIORITY_REVIEW","QUALITY_REJECTED"}
+    if not row:raise HTTPException(404,"워크리스트 항목을 찾을 수 없습니다.")
+    if body.get("status") not in allowed:raise HTTPException(422,"지원하지 않는 우선순위 상태입니다.")
+    before=row.status;row.status=body["status"];row.priority_reasons=list(row.priority_reasons or [])+["MANUAL_OVERRIDE: "+str(body.get("reason",""))];record_audit(db,action="WORKLIST_PRIORITY_CHANGED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),before={"status":before},after={"status":row.status},reason=body.get("reason"),actor_role=role);db.commit();return {"worklist_id":row.id,"status":row.status,"reasons":row.priority_reasons}
+
+@app.patch("/api/v1/worklist/rules")
+def change_priority_rule(body:dict,request:Request,x_role:str|None=Header(default=None,alias="X-Role"),x_actor:str|None=Header(default=None,alias="X-Actor"),db:Session=Depends(get_db)):
+    require_role(x_role,{"ADMIN"});current=db.scalar(select(ReviewPriorityRule).where(ReviewPriorityRule.active==True).order_by(ReviewPriorityRule.created_at.desc()))
+    version=str(body.get("version",f"{time.time():.0f}"))
+    if db.scalar(select(ReviewPriorityRule).where(ReviewPriorityRule.version==version)):raise HTTPException(409,"이미 존재하는 규칙 버전입니다.")
+    if current:current.active=False
+    row=ReviewPriorityRule(version=version,thresholds=body.get("thresholds",{}),changed_by=x_actor or "admin",change_reason=body.get("reason",""));db.add(row);record_audit(db,action="PRIORITY_RULE_CHANGED",target_id=version,request_id=request.headers.get("X-Request-ID","generated"),before=current.thresholds if current else None,after=row.thresholds,reason=row.change_reason,actor_role="ADMIN");db.commit();return {"version":row.version,"thresholds":row.thresholds,"active":True}
+
+@app.get("/api/v1/xray/analyses/{analysis_id}/gradcam-viewer")
+def gradcam_viewer(analysis_id:str,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    require_role(x_role,{"RADIOLOGIST","ADMIN"});row=db.get(XrayAnalysis,analysis_id)
+    if not row:raise HTTPException(404,"통합 분석 결과를 찾을 수 없습니다.")
+    artifact=db.scalar(select(ExplanationArtifact).where(ExplanationArtifact.analysis_id==analysis_id,ExplanationArtifact.available==True))
+    if row.model_info.get("dummy_mode",True) or not artifact:return {"enabled":False,"status":"DUMMY_DISABLED","reason":"실제 모델에서 생성되고 검증된 히트맵이 없습니다.","warning":"설명 가능성 시각화는 진단 근거가 아닙니다."}
+    return {"enabled":True,"original_url":f"/api/v1/xray/analyses/{analysis_id}","findings":[],"heatmap_url":artifact.storage_uri,"overlay_url":artifact.storage_uri,"warning":"설명 가능성 시각화는 진단 근거가 아닙니다."}
+
+@app.get("/api/v1/models")
+def list_model_releases(db:Session=Depends(get_db)):
+    rows=db.scalars(select(ModelRelease).order_by(ModelRelease.created_at.desc())).all();return [{"model_id":x.id,"name":x.name,"version":x.version,"model_sha256":x.model_sha256,"training_dataset_version":x.training_dataset_version,"test_dataset_version":x.test_dataset_version,"status":x.status,"automated_tests":x.automated_tests,"comparison_result":x.comparison_result,"approver":x.approver,"approval_reason":x.approval_reason,"rollback_model_id":x.rollback_model_id,"inference_allowed":x.status=="DEPLOYED"} for x in rows]
+
+@app.post("/api/v1/models/register")
+def register_model(body:dict,request:Request,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    role=require_role(x_role,{"ML_ENGINEER","ADMIN"});sha=str(body.get("model_sha256","")).lower()
+    if len(sha)!=64 or any(c not in "0123456789abcdef" for c in sha):raise HTTPException(422,"모델 파일 SHA-256이 필요합니다.")
+    if not body.get("training_dataset_version") or not body.get("test_dataset_version"):raise HTTPException(422,"학습·시험 데이터셋 버전이 필요합니다.")
+    row=ModelRelease(name=body.get("name","unnamed"),version=body.get("version","0"),model_sha256=sha,training_dataset_version=body["training_dataset_version"],test_dataset_version=body["test_dataset_version"],rollback_model_id=body.get("rollback_model_id"));db.add(row);db.flush();record_audit(db,action="MODEL_REGISTERED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),after={"version":row.version,"sha256":sha},actor_role=role);db.commit();return {"model_id":row.id,"status":row.status}
+
+@app.post("/api/v1/models/{model_id}/validate")
+def validate_model_release(model_id:str,body:dict,request:Request,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    role=require_role(x_role,{"ML_ENGINEER","QA_RA","ADMIN"});row=db.get(ModelRelease,model_id)
+    if not row:raise HTTPException(404,"모델을 찾을 수 없습니다.")
+    row.status="APPROVAL_REQUIRED" if body.get("required_tests_passed") is True and body.get("comparison_result") else "REJECTED";row.automated_tests={"required_tests_passed":body.get("required_tests_passed") is True,"test_ids":body.get("test_ids",[])};row.comparison_result=body.get("comparison_result",{});record_audit(db,action="MODEL_VALIDATED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),after={"status":row.status},actor_role=role);db.commit();return {"model_id":row.id,"status":row.status}
+
+@app.post("/api/v1/models/{model_id}/approve")
+def approve_model_release(model_id:str,body:dict,request:Request,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    role=require_role(x_role,{"QA_RA","ADMIN"});row=db.get(ModelRelease,model_id)
+    if not row:raise HTTPException(404,"모델을 찾을 수 없습니다.")
+    if row.status!="APPROVAL_REQUIRED":raise HTTPException(409,"검증 완료 후에만 승인할 수 있습니다.")
+    if not body.get("approver") or not body.get("reason"):raise HTTPException(422,"승인자와 승인 사유가 필요합니다.")
+    row.status="APPROVED";row.approver=body["approver"];row.approval_reason=body["reason"];record_audit(db,action="MODEL_APPROVED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),after={"approver":row.approver},reason=row.approval_reason,actor_role=role);db.commit();return {"model_id":row.id,"status":row.status}
+
+@app.post("/api/v1/models/{model_id}/deploy")
+def deploy_model_release(model_id:str,request:Request,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    role=require_role(x_role,{"ADMIN"});row=db.get(ModelRelease,model_id)
+    if not row:raise HTTPException(404,"모델을 찾을 수 없습니다.")
+    if row.status!="APPROVED":raise HTTPException(409,"승인되지 않은 모델은 추론 엔진에 배포할 수 없습니다.")
+    for active in db.scalars(select(ModelRelease).where(ModelRelease.status=="DEPLOYED")).all():active.status="RETIRED"
+    row.status="DEPLOYED";record_audit(db,action="MODEL_DEPLOYED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),after={"version":row.version},actor_role=role);db.commit();return {"model_id":row.id,"status":row.status,"inference_allowed":True}
+
+@app.post("/api/v1/models/{model_id}/rollback")
+def rollback_model_release(model_id:str,request:Request,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    role=require_role(x_role,{"ADMIN"});current=db.get(ModelRelease,model_id)
+    if not current:raise HTTPException(404,"모델을 찾을 수 없습니다.")
+    target=db.get(ModelRelease,current.rollback_model_id) if current.rollback_model_id else None
+    if current.status!="DEPLOYED" or not target or target.status not in {"APPROVED","RETIRED"}:raise HTTPException(409,"승인된 롤백 모델이 지정되어야 합니다.")
+    current.status="RETIRED";target.status="DEPLOYED";record_audit(db,action="MODEL_ROLLED_BACK",target_id=current.id,request_id=request.headers.get("X-Request-ID","generated"),after={"rollback_model_id":target.id},actor_role=role);db.commit();return {"retired_model_id":current.id,"deployed_model_id":target.id,"status":"ROLLED_BACK"}
+
+@app.get("/api/v1/monitoring/metrics")
+def operational_metrics(db:Session=Depends(get_db)):
+    analyses=db.scalars(select(XrayAnalysis)).all();latencies=db.scalars(select(LatencyRecord)).all();values=[x.total_ms for x in latencies];reviews=db.scalars(select(ClinicalReview)).all();review_times=[]
+    for review in reviews:
+        source=db.get(XrayAnalysis,review.analysis_id)
+        if source and source.created_at and review.created_at:review_times.append(max(0,(review.created_at-source.created_at).total_seconds()))
+    models={}
+    for x in analyses:models[x.model_info.get("finding_model_version","UNKNOWN")]=models.get(x.model_info.get("finding_model_version","UNKNOWN"),0)+1
+    total=len(analyses);return {"total_analyses":total,"analysis_success_rate":1.0 if total else None,"average_processing_ms":sum(values)/len(values) if values else None,"p95_processing_ms":percentile(values,.95) if values else None,"quality_reject_rate":sum(x.quality.get("status")=="REJECT" for x in analyses)/total if total else None,"ood_rate":sum(x.uncertainty.get("ood_status")!="IN_DISTRIBUTION" for x in analyses)/total if total else None,"clinical_review_rate":sum(x.reviewed for x in analyses)/total if total else None,"average_review_seconds":sum(review_times)/len(review_times) if review_times else None,"api_error_rate":ops_metrics["errors"]/ops_metrics["requests"] if ops_metrics["requests"] else 0,"model_usage":models,"recent_errors":ops_metrics["recent_errors"],"services":{**__import__('app.services.pacs',fromlist=['integration_status']).integration_status(),"database":"UP","model":"DUMMY_READY" if settings.dummy_mode else "CONFIGURED","queue":"LOCAL_ONLY"},"unmeasured_note":"자료가 없는 지표는 null이며 임의 수치를 생성하지 않습니다."}
+
+@app.post("/api/v1/capa")
+def create_operational_capa(body:dict,request:Request,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    role=require_role(x_role,{"QA_RA","ADMIN"});error_type=str(body.get("error_type","")).upper()
+    if not error_type:raise HTTPException(422,"오류 유형이 필요합니다.")
+    occurrence=ErrorOccurrence(error_type=error_type,analysis_id=body.get("analysis_id"),model_version=body.get("model_version","UNKNOWN"),dataset_version=body.get("dataset_version","UNKNOWN"));db.add(occurrence);db.flush();count=db.scalar(select(func.count()).select_from(ErrorOccurrence).where(ErrorOccurrence.error_type==error_type)) or 0;threshold=int(body.get("repeat_threshold",3));capa=None
+    if count>=threshold:
+        capa=db.scalar(select(OperationalCapa).where(OperationalCapa.error_type==error_type,OperationalCapa.status.not_in(["CLOSED","REJECTED"])))
+        if not capa:capa=OperationalCapa(error_type=error_type,occurrence_count=count,model_version=occurrence.model_version,dataset_version=occurrence.dataset_version,analysis_ids=[occurrence.analysis_id] if occurrence.analysis_id else [],owner=body.get("owner","UNASSIGNED"),due_date=body.get("due_date"));db.add(capa)
+        else:capa.occurrence_count=count;capa.analysis_ids=sorted(set((capa.analysis_ids or [])+([occurrence.analysis_id] if occurrence.analysis_id else [])))
+    record_audit(db,action="ERROR_OCCURRENCE_RECORDED",target_id=occurrence.id,request_id=request.headers.get("X-Request-ID","generated"),after={"error_type":error_type,"count":count,"capa_candidate":bool(capa)},actor_role=role);db.commit();return {"occurrence_id":occurrence.id,"occurrence_count":count,"capa_candidate":bool(capa),"capa_id":capa.id if capa else None,"analysis_id":occurrence.analysis_id}
+
+@app.patch("/api/v1/capa/{capa_id}")
+def update_operational_capa(capa_id:str,body:dict,request:Request,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    role=require_role(x_role,{"QA_RA","ADMIN"});row=db.get(OperationalCapa,capa_id)
+    if not row:raise HTTPException(404,"CAPA를 찾을 수 없습니다.")
+    for field in ("root_cause","corrective_action","preventive_action","owner","due_date","effectiveness_check"):
+        if field in body:setattr(row,field,body[field])
+    if body.get("status"):
+        allowed={"CANDIDATE","OPEN","IMPLEMENTED","EFFECTIVENESS_REVIEW","APPROVED","CLOSED","REJECTED"}
+        if body["status"] not in allowed:raise HTTPException(422,"지원하지 않는 CAPA 상태입니다.")
+        if body["status"] in {"APPROVED","CLOSED"} and not body.get("approved_by"):raise HTTPException(422,"승인 또는 종료에는 승인자가 필요합니다.")
+        row.status=body["status"];row.approved_by=body.get("approved_by",row.approved_by)
+    record_audit(db,action="CAPA_UPDATED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),after={"status":row.status,"owner":row.owner},actor_role=role);db.commit();return {"capa_id":row.id,"status":row.status,"error_type":row.error_type,"occurrence_count":row.occurrence_count,"analysis_ids":row.analysis_ids,"root_cause":row.root_cause,"corrective_action":row.corrective_action,"preventive_action":row.preventive_action,"owner":row.owner,"due_date":row.due_date,"effectiveness_check":row.effectiveness_check,"approved_by":row.approved_by}
 @app.patch("/api/predictions/{prediction_id}/review", response_model=PredictionOut)
 def review(prediction_id: str, body: ReviewUpdate, request: Request, db: Session=Depends(get_db)):
     if body.corrected_region not in REGIONS: raise HTTPException(422,"지원하지 않는 분류입니다.")

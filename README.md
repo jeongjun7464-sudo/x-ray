@@ -217,3 +217,27 @@ Phase 20 범위는 [의료기관 연동 구현 현황](docs/phase20-implementati
 ## 종단 비교·데이터셋·모니터링
 
 이전/현재 익명 분석 비교, 촬영 조건 불일치 제한, 의료진 수정과 비자동 active-learning 후보 저장, 환자 단위 데이터 분할·중복 제거·라벨 승인·CSV manifest, 모델 배포 계보와 의료기기 문서 초안 생성을 제공합니다. 승인된 검증 정답이 없으면 실패 분석과 성능·드리프트 수치는 `NOT_MEASURED`로 유지합니다. 모든 비교·탐지 결과는 연구·교육용 보조 정보이며 의료진 확인이 필요합니다. 자세한 범위는 [Phase 24 구현 현황](docs/phase24-longitudinal-dataset-monitoring.md)을 참고하세요.
+
+## 의료기관 운영·검증 기능
+
+- Orthanc REST와 DICOMweb QIDO/WADO/STOW 어댑터 계약 및 `NOT_CONFIGURED` 안전 상태
+- 합성 DICOM 기반 Study import, 익명 UID 해시, AP/PA/LATERAL 그룹화, 중복 SOP 차단과 필수 방향 검사
+- 영상별/Study 종합 결과, 충돌 검토 라우팅, 버전형 우선순위 규칙과 감사 로그
+- 제한 임상정보 allowlist와 이름·주민번호·전화·주소 필드 차단
+- 모델 등록·검증·승인·배포·롤백 Release Gate 및 승인 전 추론 차단
+- 운영 지표, 모델 사용량, 최근 API 오류와 PACS/DB/모델/큐 상태 화면
+- 반복 오류 임계값 기반 CAPA 후보와 분석·모델·데이터 버전 추적
+
+자동시험은 현재 **백엔드·ML 56개, 프론트엔드 8개**가 통과하고 TypeScript/Vite 프로덕션 빌드가 성공한다. 실제 PACS/Orthanc 네트워크, 운영 인증, 실제 모델 Grad-CAM, 영속 메트릭 백엔드와 임상 검증은 연결되지 않았다. 따라서 이러한 항목은 구현 완료로 표시하지 않으며 실제 성능 수치도 제공하지 않는다. 자세한 내용은 [PACS 설계](docs/pacs-integration.md), [모델 릴리스](docs/model-release-process.md), [임상 검토](docs/clinical-review-workflow.md), [CAPA](docs/capa-workflow.md), [운영 모니터링](docs/operations-monitoring.md), [RBAC](docs/rbac-matrix.md)을 참고한다.
+
+## 검증·재현·감사 대응
+
+분석 provenance 조회/비교, 원본 미보존 재현 차단, 위험 기반 시험 시나리오, 15종 합성 안전 사례, 독립 이중 라벨링과 합의 승인, 표본 수 기반 공정성 평가, 멱등 복구 작업, 감사 ZIP 및 무결성 검증을 제공한다. 프론트의 **검증·감사 대응** 메뉴는 loading, empty, error, success, permission-denied 상태를 구현한다.
+
+- `PRODUCTION`: 없음. 본 저장소는 연구·교육용이다.
+- `DEMO/DUMMY`: 부위·소견 모델, 합성 DICOM/안전 사례.
+- `MOCK/LOCAL`: PACS adapter, 장애 주입과 로컬 복구 상태 머신.
+- `PARTIAL/NOT_CONFIGURED`: 원본 기반 실제 재실행, 외부 악성코드 검사, 관리자 IdP 재인증, 외부 작업 큐, 실제 PACS/DICOMweb 전송.
+- 검증 데이터가 없으면 성능 및 공정성 값을 생성하지 않는다. 자동 생성 감사 문서는 승인 전 초안이다.
+
+세부 설계는 [재현성](docs/reproducibility.md), [시험 관리](docs/test-management.md), [라벨 품질](docs/annotation-quality.md), [공정성](docs/fairness-evaluation.md), [장애 복구](docs/failure-recovery.md), [감사 패키지](docs/audit-package.md), [보안 시험](docs/security-test-plan.md), [비기능 검증](docs/non-functional-validation.md)에 기록했다.

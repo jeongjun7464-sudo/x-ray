@@ -295,3 +295,153 @@ class ClinicalReview(Base):
 class ModelRegistry(Base):
     __tablename__="model_registry"
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()));model_name: Mapped[str]=mapped_column(String(100),index=True);model_version: Mapped[str]=mapped_column(String(64),index=True);checkpoint_hash: Mapped[str|None]=mapped_column(String(64),nullable=True);dummy_mode: Mapped[bool]=mapped_column(Boolean);approval_status: Mapped[str]=mapped_column(String(32),default="DEMO_ONLY")
+
+class LongitudinalComparison(Base):
+    __tablename__="longitudinal_comparisons"
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()))
+    prior_analysis_id: Mapped[str]=mapped_column(String(36),index=True)
+    current_analysis_id: Mapped[str]=mapped_column(String(36),index=True)
+    compatibility: Mapped[dict]=mapped_column(JSON,default=dict)
+    changes: Mapped[dict]=mapped_column(JSON,default=dict)
+    review_status: Mapped[str]=mapped_column(String(32),default="REVIEW_REQUIRED")
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=lambda:datetime.now(timezone.utc))
+
+class ActiveLearningCandidate(Base):
+    __tablename__="active_learning_candidates"
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()))
+    analysis_id: Mapped[str]=mapped_column(String(36),index=True)
+    anonymous_hash: Mapped[str]=mapped_column(String(64),index=True)
+    original_labels: Mapped[dict]=mapped_column(JSON)
+    corrected_labels: Mapped[dict]=mapped_column(JSON)
+    model_version: Mapped[str]=mapped_column(String(64))
+    approved_for_export: Mapped[bool]=mapped_column(Boolean,default=False)
+    auto_training_enabled: Mapped[bool]=mapped_column(Boolean,default=False)
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=lambda:datetime.now(timezone.utc))
+
+class DatasetVersion(Base):
+    __tablename__="dataset_versions"
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()))
+    name: Mapped[str]=mapped_column(String(100),index=True)
+    version: Mapped[str]=mapped_column(String(32),index=True)
+    status: Mapped[str]=mapped_column(String(32),default="DRAFT")
+    manifest: Mapped[list]=mapped_column(JSON,default=list)
+    duplicate_count: Mapped[int]=mapped_column(Integer,default=0)
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=lambda:datetime.now(timezone.utc))
+
+class ModelDeployment(Base):
+    __tablename__="model_deployments"
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()))
+    model_version: Mapped[str]=mapped_column(String(64),index=True)
+    checkpoint_sha256: Mapped[str]=mapped_column(String(64))
+    dataset_version: Mapped[str]=mapped_column(String(64))
+    deployment_status: Mapped[str]=mapped_column(String(32),default="DEMO_ONLY")
+    performance_status: Mapped[str]=mapped_column(String(32),default="NOT_MEASURED")
+    drift_status: Mapped[str]=mapped_column(String(32),default="INSUFFICIENT_DATA")
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=lambda:datetime.now(timezone.utc))
+
+class StudyAnalysis(Base):
+    __tablename__="study_analyses"
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()))
+    study_id: Mapped[str]=mapped_column(String(36),index=True)
+    instance_results: Mapped[list]=mapped_column(JSON,default=list)
+    aggregate_result: Mapped[dict]=mapped_column(JSON,default=dict)
+    clinical_context: Mapped[dict]=mapped_column(JSON,default=dict)
+    clinical_context_effect: Mapped[dict]=mapped_column(JSON,default=dict)
+    status: Mapped[str]=mapped_column(String(32),index=True,default="REVIEW_REQUIRED")
+    priority_reasons: Mapped[list]=mapped_column(JSON,default=list)
+    priority_rule_version: Mapped[str]=mapped_column(String(32),default="1.0")
+    reviewed: Mapped[bool]=mapped_column(Boolean,default=False)
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=lambda:datetime.now(timezone.utc))
+
+class ReviewPriorityRule(Base):
+    __tablename__="review_priority_rules"
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()))
+    version: Mapped[str]=mapped_column(String(32),unique=True,index=True)
+    thresholds: Mapped[dict]=mapped_column(JSON,default=dict)
+    active: Mapped[bool]=mapped_column(Boolean,default=True)
+    changed_by: Mapped[str]=mapped_column(String(64),default="system")
+    change_reason: Mapped[str]=mapped_column(String(500),default="initial rule")
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=lambda:datetime.now(timezone.utc))
+
+class ModelRelease(Base):
+    __tablename__="model_releases"
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()))
+    name: Mapped[str]=mapped_column(String(100),index=True)
+    version: Mapped[str]=mapped_column(String(64),index=True)
+    model_sha256: Mapped[str]=mapped_column(String(64),unique=True)
+    training_dataset_version: Mapped[str]=mapped_column(String(64))
+    test_dataset_version: Mapped[str]=mapped_column(String(64))
+    status: Mapped[str]=mapped_column(String(32),default="REGISTERED",index=True)
+    automated_tests: Mapped[dict]=mapped_column(JSON,default=dict)
+    comparison_result: Mapped[dict]=mapped_column(JSON,default=dict)
+    approver: Mapped[str|None]=mapped_column(String(64),nullable=True)
+    approval_reason: Mapped[str|None]=mapped_column(String(500),nullable=True)
+    rollback_model_id: Mapped[str|None]=mapped_column(String(36),nullable=True)
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=lambda:datetime.now(timezone.utc))
+
+class OperationalCapa(Base):
+    __tablename__="operational_capas"
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()))
+    error_type: Mapped[str]=mapped_column(String(64),index=True)
+    occurrence_count: Mapped[int]=mapped_column(Integer,default=1)
+    model_version: Mapped[str]=mapped_column(String(64),default="UNKNOWN")
+    dataset_version: Mapped[str]=mapped_column(String(64),default="UNKNOWN")
+    analysis_ids: Mapped[list]=mapped_column(JSON,default=list)
+    root_cause: Mapped[str]=mapped_column(Text,default="")
+    corrective_action: Mapped[str]=mapped_column(Text,default="")
+    preventive_action: Mapped[str]=mapped_column(Text,default="")
+    owner: Mapped[str]=mapped_column(String(64),default="UNASSIGNED")
+    due_date: Mapped[str|None]=mapped_column(String(16),nullable=True)
+    effectiveness_check: Mapped[str]=mapped_column(Text,default="")
+    status: Mapped[str]=mapped_column(String(32),default="CANDIDATE")
+    approved_by: Mapped[str|None]=mapped_column(String(64),nullable=True)
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=lambda:datetime.now(timezone.utc))
+
+class ErrorOccurrence(Base):
+    __tablename__="error_occurrences"
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()))
+    error_type: Mapped[str]=mapped_column(String(64),index=True)
+    analysis_id: Mapped[str|None]=mapped_column(String(36),nullable=True,index=True)
+    model_version: Mapped[str]=mapped_column(String(64),default="UNKNOWN")
+    dataset_version: Mapped[str]=mapped_column(String(64),default="UNKNOWN")
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=lambda:datetime.now(timezone.utc))
+
+class AnalysisProvenance(Base):
+    __tablename__="analysis_provenance"
+    analysis_id: Mapped[str]=mapped_column(String(36),primary_key=True)
+    input_sha256: Mapped[str]=mapped_column(String(64),index=True)
+    manifest: Mapped[dict]=mapped_column(JSON)
+    raw_input_retained: Mapped[bool]=mapped_column(Boolean,default=False)
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=lambda:datetime.now(timezone.utc))
+
+class TestRequirement(Base):
+    __tablename__="test_requirements"
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()));requirement_id: Mapped[str]=mapped_column(String(64),unique=True,index=True);risk_ids: Mapped[list]=mapped_column(JSON,default=list);title: Mapped[str]=mapped_column(String(200))
+class TestScenario(Base):
+    __tablename__="test_scenarios"
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()));test_id: Mapped[str]=mapped_column(String(64),unique=True,index=True);requirement_id: Mapped[str]=mapped_column(String(64),index=True);risk_ids: Mapped[list]=mapped_column(JSON,default=list);scenario_type: Mapped[str]=mapped_column(String(32));preconditions: Mapped[str]=mapped_column(Text);input_data: Mapped[dict]=mapped_column(JSON);steps: Mapped[list]=mapped_column(JSON);expected_result: Mapped[str]=mapped_column(Text)
+class TestExecution(Base):
+    __tablename__="test_executions"
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()));scenario_id: Mapped[str]=mapped_column(String(36),index=True);actual_result: Mapped[str]=mapped_column(Text);status: Mapped[str]=mapped_column(String(16));tester: Mapped[str]=mapped_column(String(64));retest_of: Mapped[str|None]=mapped_column(String(36),nullable=True);executed_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=lambda:datetime.now(timezone.utc))
+class TestEvidence(Base):
+    __tablename__="test_evidence"
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()));execution_id: Mapped[str]=mapped_column(String(36),index=True);filename: Mapped[str]=mapped_column(String(200));sha256: Mapped[str]=mapped_column(String(64));storage_status: Mapped[str]=mapped_column(String(32),default="METADATA_ONLY")
+class DefectRecord(Base):
+    __tablename__="defect_records"
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()));execution_id: Mapped[str]=mapped_column(String(36),index=True);summary: Mapped[str]=mapped_column(String(300));status: Mapped[str]=mapped_column(String(32),default="OPEN")
+
+class AnnotationRecord(Base):
+    __tablename__="annotation_records"
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()));anonymous_image_hash: Mapped[str]=mapped_column(String(64),index=True);first_review: Mapped[dict]=mapped_column(JSON);second_review: Mapped[dict|None]=mapped_column(JSON,nullable=True);adjudication: Mapped[dict|None]=mapped_column(JSON,nullable=True);final_label: Mapped[dict|None]=mapped_column(JSON,nullable=True);status: Mapped[str]=mapped_column(String(32),default="FIRST_REVIEWED");history: Mapped[list]=mapped_column(JSON,default=list);created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=lambda:datetime.now(timezone.utc))
+
+class RecoveryJob(Base):
+    __tablename__="recovery_jobs"
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()));idempotency_key: Mapped[str]=mapped_column(String(100),unique=True,index=True);analysis_id: Mapped[str|None]=mapped_column(String(36),nullable=True);status: Mapped[str]=mapped_column(String(32),default="QUEUED");attempts: Mapped[int]=mapped_column(Integer,default=0);max_attempts: Mapped[int]=mapped_column(Integer,default=3);next_retry_seconds: Mapped[int]=mapped_column(Integer,default=0);failure_reason: Mapped[str|None]=mapped_column(String(500),nullable=True);model_version: Mapped[str]=mapped_column(String(64),default="UNKNOWN");created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=lambda:datetime.now(timezone.utc))
+
+class AuditPackage(Base):
+    __tablename__="audit_packages"
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()));created_by_role: Mapped[str]=mapped_column(String(32));manifest: Mapped[dict]=mapped_column(JSON);payload_base64: Mapped[str]=mapped_column(Text);package_sha256: Mapped[str]=mapped_column(String(64));status: Mapped[str]=mapped_column(String(32),default="READY");created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=lambda:datetime.now(timezone.utc))
+
+class SecurityEvent(Base):
+    __tablename__="security_events"
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()));event_type: Mapped[str]=mapped_column(String(64),index=True);request_id: Mapped[str]=mapped_column(String(64),index=True);details: Mapped[dict]=mapped_column(JSON,default=dict);created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=lambda:datetime.now(timezone.utc))
