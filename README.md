@@ -217,6 +217,97 @@ X-ray/DICOM 영상을 해부학적 촬영 부위로 분류하고, 영상 품질�
 - 합성 DICOM 생성부터 업로드·분류·검토·보고서까지 시연
 - 합성 데이터는 시스템 기능 검증 전용이며 모델 성능 평가에는 사용하지 않음
 
+## 시스템 이용 구조도
+
+아래 구조도는 사용자가 접하는 화면과 실제 서비스 계층, 시연용 AI, 향후 외부 연동 경계를 구분합니다.
+
+```mermaid
+flowchart LR
+    User[일반 사용자] --> Web[React 웹 화면]
+    Technician[TECHNICIAN] --> Web
+    Radiologist[RADIOLOGIST] --> Web
+    QARA[QA / RA] --> Web
+    MLE[ML ENGINEER] --> Web
+    Admin[ADMIN] --> Web
+
+    Web --> API[FastAPI 서비스]
+    API --> Security[파일 검증 및 비식별화]
+    API --> Workflow[분석 및 검토 워크플로우]
+    API --> Validation[시험 재현성 및 감사 관리]
+
+    Security --> LocalDB[(SQLAlchemy DB)]
+    Workflow --> LocalDB
+    Validation --> LocalDB
+
+    Workflow --> DummyModel[DEMO / DUMMY AI 모델]
+    Workflow -. 승인 체크포인트 구성 시 .-> RealModel[실제 승인 모델 어댑터]
+    API -. 향후 기관 설정 시 .-> PACS[PACS / Orthanc / DICOMweb]
+    API -. 향후 운영 설정 시 .-> External[외부 Queue / Object Storage / Malware Scanner]
+
+    classDef implemented fill:#dcfce7,stroke:#15803d,color:#14532d;
+    classDef dummy fill:#fef3c7,stroke:#d97706,color:#78350f;
+    classDef future fill:#e5e7eb,stroke:#6b7280,color:#374151,stroke-dasharray:5 5;
+
+    class User,Technician,Radiologist,QARA,MLE,Admin,Web,API,Security,Workflow,Validation,LocalDB implemented;
+    class DummyModel dummy;
+    class RealModel,PACS,External future;
+```
+
+- 녹색 실선: 저장소에서 실제 동작하는 애플리케이션 기능
+- 노란색: 합성 입력과 결정적 결과를 사용하는 `DEMO/DUMMY` 기능
+- 회색 점선: 인터페이스만 제공되며 외부 설정 전에는 `NOT_CONFIGURED`인 향후 연동 기능
+
+## 전체 분석 워크플로우
+
+분석 결과는 연구·교육용 보조 정보이며 낮은 신뢰도, 품질 문제, OOD 또는 메타데이터 충돌이 있으면 사람이 검토합니다.
+
+```mermaid
+flowchart TD
+    Start([분석 시작]) --> Input{입력 선택}
+    Input -->|사용자 파일| Upload[PNG / JPG / DICOM 업로드]
+    Input -->|데모| Synthetic[합성 DICOM 또는 안전 사례 생성]
+
+    Upload --> Validate[크기 MIME 및 파일 signature 검사]
+    Synthetic --> Validate
+    Validate -->|실패| Reject[안전하게 거부하고 오류 사유 표시]
+    Validate -->|통과| Decode[DICOM 디코딩 및 비식별화]
+    Decode --> Quality[영상 품질 자동검사]
+    Quality --> OOD[지원 범위 및 OOD 평가]
+    OOD --> Region[해부학적 촬영 부위 분류]
+    Region --> Findings[의심 소견 multi-label 추론 계약]
+    Findings --> Metadata[DICOM 메타데이터 교차검증]
+    Metadata --> Route[라우팅 및 검토 우선순위 결정]
+
+    Route --> Decision{사람 검토 조건인가}
+    Decision -->|낮은 신뢰도 OOD UNKNOWN 충돌 품질 경고| Worklist[의료영상 검토 워크리스트]
+    Decision -->|조건 없음| Result[연구용 분석 결과]
+    Worklist --> Review[의료진 결과 확인 및 수정]
+    Review --> Result
+
+    Review --> Candidate[익명 Active Learning 후보]
+    Candidate --> NoTrain[자동 재학습 안 함]
+    Result --> Report[익명 PDF 및 로컬 내보내기]
+    Result --> Audit[감사 로그 latency provenance 저장]
+    Audit --> Repro[결과 비교 및 재현 가능성 확인]
+
+    RealModel[실제 승인 모델] -. 체크포인트 미설정 .-> DummyModel[DEMO / DUMMY 결과]
+    DummyModel --> Region
+    DummyModel --> Findings
+    PACS[PACS / DICOMweb] -. NOT_CONFIGURED .-> Upload
+
+    classDef implemented fill:#dcfce7,stroke:#15803d,color:#14532d;
+    classDef dummy fill:#fef3c7,stroke:#d97706,color:#78350f;
+    classDef future fill:#e5e7eb,stroke:#6b7280,color:#374151,stroke-dasharray:5 5;
+    classDef review fill:#dbeafe,stroke:#2563eb,color:#1e3a8a;
+
+    class Start,Input,Upload,Synthetic,Validate,Reject,Decode,Quality,OOD,Region,Findings,Metadata,Route,Decision,Result,Candidate,NoTrain,Report,Audit,Repro implemented;
+    class DummyModel dummy;
+    class RealModel,PACS future;
+    class Worklist,Review review;
+```
+
+실제 모델이 구성되지 않은 기본 환경에서는 분류·소견 결과가 `DEMO/DUMMY`로 표시되고 실제 Grad-CAM은 비활성화됩니다. PACS, DICOMweb, 외부 악성코드 검사, 외부 큐와 객체 저장소는 설정 전까지 연결 성공으로 표시하지 않습니다. 워크리스트의 결과 확정과 수정은 권한을 가진 검토자가 수행합니다.
+
 ## 기술 스택
 
 | 영역 | 실제 연결 기술 |
