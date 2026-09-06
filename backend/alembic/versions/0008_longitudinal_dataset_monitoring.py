@@ -1,0 +1,11 @@
+"""longitudinal dataset and monitoring tables"""
+from alembic import op
+import sqlalchemy as sa
+revision="0008_longitudinal";down_revision="0007_integrated_xray";branch_labels=None;depends_on=None
+def upgrade():
+    op.create_table("longitudinal_comparisons",sa.Column("id",sa.String(36),primary_key=True),sa.Column("prior_analysis_id",sa.String(36),nullable=False),sa.Column("current_analysis_id",sa.String(36),nullable=False),sa.Column("compatibility",sa.JSON(),nullable=False),sa.Column("changes",sa.JSON(),nullable=False),sa.Column("review_status",sa.String(32),nullable=False),sa.Column("created_at",sa.DateTime(timezone=True),nullable=False))
+    op.create_table("active_learning_candidates",sa.Column("id",sa.String(36),primary_key=True),sa.Column("analysis_id",sa.String(36),nullable=False),sa.Column("anonymous_hash",sa.String(64),nullable=False),sa.Column("original_labels",sa.JSON(),nullable=False),sa.Column("corrected_labels",sa.JSON(),nullable=False),sa.Column("model_version",sa.String(64),nullable=False),sa.Column("approved_for_export",sa.Boolean(),nullable=False),sa.Column("auto_training_enabled",sa.Boolean(),nullable=False),sa.Column("created_at",sa.DateTime(timezone=True),nullable=False))
+    op.create_table("dataset_versions",sa.Column("id",sa.String(36),primary_key=True),sa.Column("name",sa.String(100),nullable=False),sa.Column("version",sa.String(32),nullable=False),sa.Column("status",sa.String(32),nullable=False),sa.Column("manifest",sa.JSON(),nullable=False),sa.Column("duplicate_count",sa.Integer(),nullable=False),sa.Column("created_at",sa.DateTime(timezone=True),nullable=False))
+    op.create_table("model_deployments",sa.Column("id",sa.String(36),primary_key=True),sa.Column("model_version",sa.String(64),nullable=False),sa.Column("checkpoint_sha256",sa.String(64),nullable=False),sa.Column("dataset_version",sa.String(64),nullable=False),sa.Column("deployment_status",sa.String(32),nullable=False),sa.Column("performance_status",sa.String(32),nullable=False),sa.Column("drift_status",sa.String(32),nullable=False),sa.Column("created_at",sa.DateTime(timezone=True),nullable=False))
+def downgrade():
+    for table in ("model_deployments","dataset_versions","active_learning_candidates","longitudinal_comparisons"):op.drop_table(table)
