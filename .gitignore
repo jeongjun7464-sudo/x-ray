@@ -32,3 +32,4 @@ node_modules/
 frontend/dist/
 *.tsbuildinfo
 .pytest-tmp/
+.pytest-*/
