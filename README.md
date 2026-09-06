@@ -10,7 +10,7 @@
 
 주요 API는 `POST /api/v1/xray/analyze`, `POST /api/v1/xray/analyze-batch`, `GET /api/v1/xray/analyses/{id}`, `/heatmap`, `/report`, `GET /api/v1/xray/worklist`, `PATCH /api/v1/xray/analyses/{id}/review`입니다.
 
-검증 결과: 백엔드·ML **39 passed**, 프론트엔드 **4 passed**, TypeScript/Vite 빌드 성공. 현재 환경에는 Docker CLI가 없어 `docker compose config`는 실행하지 못했습니다.
+검증 결과: 백엔드·ML **56 passed**, 프론트엔드 **8 passed**, TypeScript/Vite 빌드 성공. 현재 환경에는 Docker CLI가 없어 `docker compose config`는 실행하지 못했습니다.
 
 이 결과는 연구·교육용 분석 지원 정보이며 의료진의 진단이나 치료 결정을 대체하지 않습니다. 포트폴리오에서는 DICOM 보안, 다중 라벨 ML 계약, Human-in-the-loop, 모델 계보, 감사 로그와 책임 있는 AI를 강조합니다.
 
@@ -35,6 +35,140 @@ X-ray/DICOM 영상을 해부학적 촬영 부위로 분류하고, 영상 품질�
 → 검토자 수정·감사 로그·능동학습 후보 등록
 → 익명 PDF / 실험용 DICOM SR / 로컬 FHIR Bundle 내보내기
 ```
+
+## 사용 가능한 기능 전체 목록
+
+기능 상태는 `DEMO/DUMMY`(합성 데이터와 결정적 더미 모델로 동작), `LOCAL`(로컬 DB·파일·큐에서 실제 동작), `PARTIAL`(인터페이스는 구현됐으나 외부 시스템 미연결), `NOT_CONFIGURED`(안전하게 비활성화)로 구분합니다. 이 저장소에는 임상 운영 승인을 받은 `PRODUCTION` 기능이 없습니다.
+
+### 사용자 화면
+
+| 화면 | 이용 가능한 기능 |
+|---|---|
+| 대시보드 | 분석 건수, 검토 필요 현황, 최근 분석 진입 |
+| 통합 X-ray 분석 | PNG/JPG/DICOM 업로드, 품질·OOD·부위·의심 소견 분석, 익명 결과 확인 |
+| 비교·데이터셋·모니터링 | 이전/현재 영상 비교, 데이터셋 구축 상태, 실패 분석, 모델 모니터링, 문서 초안 |
+| 의료기관 운영 | PACS·DB·모델·큐 상태, Study 워크리스트, Model Release Gate, CAPA |
+| 검증·감사 대응 | provenance, 시험 시나리오, 합성 안전 사례, 라벨 일치도, 공정성, 복구 작업, 감사 패키지 |
+| 부위 분류 | 합성 DICOM 데모, 파일 업로드, 8개 부위와 상위 3개 후보 |
+| 검토 대기·분석 이력 | 낮은 신뢰도·OOD·품질·메타데이터 충돌 결과 조회와 수정 |
+| 성능 통계 | 실제 저장 결과 기반 통계 및 검증 자료 부재 시 `NOT_MEASURED` |
+| AI 리터러시 | 역할별 교육, 신뢰도 설명, 용어사전, 퀴즈, 사용자 동의 |
+| 기관 연동 관리 | 프로토콜, 코드 매핑, 라우팅 규칙, feature flag와 서비스 상태 |
+| 포트폴리오·시스템 정보 | 구현 기술, 모델·데이터 출처, 버전, 제한사항과 면책 고지 |
+
+모든 주요 화면에는 loading, empty, error, success 상태를 제공하며 검증·감사 화면에는 permission-denied 상태도 제공합니다.
+
+### 영상 입력·DICOM·보안
+
+- PNG, JPG/JPEG, DICOM 단일 분석과 최대 20개 배치 분석
+- 확장자, MIME type, 파일 signature 교차검사 및 업로드 크기 제한
+- DICOM `MONOCHROME1/2`, rescale, windowing, 다중 프레임 첫 프레임 처리
+- PatientName 등 식별 태그 제거, UID·파일의 SHA-256 익명 해시
+- ZIP 경로 조작·절대경로·심볼릭 링크·중첩 ZIP·압축 폭탄·파일 수 검사
+- 실제 환자정보 입력 필드 차단과 제한 임상정보 allowlist
+- 악성코드 검사 adapter 상태 조회: 외부 엔진 미연결 시 `NOT_CONFIGURED`
+- 요청 ID와 감사 이벤트 연결, 비밀값 로그 마스킹 구조
+
+### AI 분석·설명·라우팅
+
+- 8개 해부학적 촬영 부위 분류, 신뢰도와 상위 3개 후보
+- 10개 이상 의심 소견 multi-label 추론 계약과 소견별 임계값
+- 밝기·대비·흐림·빈 영상·해상도 품질 검사와 `PASS/WARNING/REJECT`
+- 최대 확률·entropy 기반 `IN_DISTRIBUTION/OUT_OF_DISTRIBUTION/UNKNOWN`
+- DICOM Modality, BodyPartExamined, 설명, 촬영 방향, 좌우 방향과 AI 결과 교차검증
+- CHEST/SPINE/HAND_WRIST/KNEE별 안전 라우팅과 UNKNOWN 검토 대기
+- dummy 결과의 Grad-CAM 차단, 실제 모델 artifact만 표시하는 Viewer 계약
+- 원본·히트맵·오버레이, 투명도·확대·이동·밝기·대비 컨트롤 UI
+- DenseNet121, EfficientNetV2, ConvNeXt, ONNX 모델 비교 계약
+- 랜드마크·OCR 검토·detection·불확실성·전처리 비교·stress-test 연구 API
+
+### Study·의료기관 운영
+
+- 익명 Study/Series/SOP UID 해시, AP/PA/LATERAL 그룹화와 중복 SOP 차단
+- 필수 촬영 방향 누락 검사, 영상별 결과와 Study 종합 결과 분리
+- 결과 충돌 시 의료진 검토 라우팅 및 사유·규칙 버전 저장
+- `ROUTINE/REVIEW_REQUIRED/HIGH_PRIORITY_REVIEW/QUALITY_REJECTED` 우선순위
+- 관리자의 우선순위 임계값 변경과 변경 사유 감사 기록
+- Orthanc REST, DICOMweb QIDO-RS/WADO-RS/STOW-RS adapter 계약
+- 실제 PACS 미연결 시 `NOT_CONFIGURED`, 외부 전송 기본 비활성화
+- 로컬 FHIR R4 예제 Bundle, 실험용 DICOM SR, 익명 PDF 보고서
+- HMAC 웹훅 서명과 로컬 전송 대기열
+
+### 의료진 검토·라벨·능동학습
+
+- 낮은 신뢰도, OOD, UNKNOWN, 메타데이터 충돌, 품질 경고 워크리스트
+- 의료진의 부위·소견 수정과 수정 전후 감사 이력
+- 수정 결과를 익명 active-learning 후보로 저장하며 자동 재학습 비활성화
+- LABELER 1차 판독, RADIOLOGIST 독립 2차 판독과 자동 불일치 탐지
+- ADJUDICATOR 합의 판독·최종 승인 및 승인 전 학습 데이터 제외
+- 부위·소견별 판독자 일치율과 표본 수 조회
+- 익명 active-learning 및 승인 라벨 CSV 내보내기
+
+### 데이터셋·모델 수명주기
+
+- DICOM 비식별화, SHA-256 중복 제거, 환자 단위 train/validation/test 분할
+- 다중 소견 라벨링·승인, CSV manifest와 데이터셋 버전 관리
+- 모델명·버전·체크포인트 SHA-256·학습/시험 데이터 버전 등록
+- `REGISTERED → VALIDATING → APPROVAL_REQUIRED → APPROVED → DEPLOYED` Release Gate
+- 필수 시험·기존 모델 비교·승인자·승인 사유·롤백 모델 기록
+- 승인되지 않은 모델의 배포·추론 차단과 배포 모델 롤백
+- 모델 카드, 데이터셋 카드, 배포 계보와 feature flag
+
+### 분석 재현·시험·공정성
+
+- 입력 SHA-256, 전처리/모델/체크포인트/데이터셋/임계값/규칙/앱 버전, 환경, seed 저장
+- 두 분석의 입력·설정·부위·소견 확률 차이 비교
+- 원본 미보존 시 재실행을 성공 처리하지 않고 `RAW_INPUT_NOT_RETAINED` 반환
+- 요구사항·위험·시나리오·실행·증적·결함·재시험 연결
+- NORMAL, BOUNDARY, NEGATIVE, SECURITY, PERFORMANCE, RECOVERY, USABILITY 시험
+- BLUR부터 DATABASE_FAILURE까지 15종 합성 안전 사례와 기대 결과
+- 연령대·성별·장비·기관·촬영 방향·품질 그룹별 공정성 지표
+- sensitivity, specificity, precision, recall, F1, AUROC, FPR/FNR과 표본 수
+- 최소 표본 미달 또는 검증 자료 부재 시 `INSUFFICIENT_DATA`
+
+### 장애 대응·모니터링·CAPA
+
+- `QUEUED/PROCESSING/SUCCEEDED/RETRY_PENDING/QUARANTINED/FAILED/MANUAL_REVIEW` 작업 상태
+- Idempotency-Key 중복 분석 차단, 제한 횟수 지수 백오프, 실패 작업 격리
+- 추론 서버 장애 시 의료진 검토 전환, 관리자 수동 재처리, 롤백 후 재처리
+- 총 분석, 성공률, 평균/P95 latency, 품질 REJECT, OOD, 검토, API 오류율
+- 모델별 사용 건수, 최근 오류와 PACS·DB·모델·큐 상태
+- 반복 오류 임계값 기반 CAPA 후보, 원인·시정/예방조치·담당자·기한·효과성·승인 상태
+
+### 책임 있는 AI·교육·Agent
+
+- 신뢰도와 정확도의 차이, UNKNOWN, 검토 상태, Grad-CAM 한계 설명
+- 업로드·디코딩·비식별화·전처리·추론·Grad-CAM·DB·전체 latency
+- 평균, P50/P95/P99, 처리량, timeout, CPU/GPU와 모델별 속도 비교 계약
+- 일반 사용자·검토자·관리자·개발자별 교육과 객관식 퀴즈
+- 버전형 사용자 동의, 오분류 신고, Human-in-the-loop 보호
+- 책임 있는 AI 대시보드, 위험 등록부, 한국어 용어사전과 접근성 지원
+- LangGraph 기반 로컬 업무지원 Agent, 하이브리드 RAG, 근거와 trace
+- prompt injection·개인정보 차단, 도구 allowlist, 변경 제안 후 사용자 확인
+
+### 감사·문서·내보내기
+
+- 요구사항 명세, 위험관리, 검증 계획/결과, 모델 변경 영향평가 문서 초안
+- 요구사항 → 위험 → 구현 파일 → API → 테스트 → 결과 추적성 매트릭스
+- requirements PDF, 위험관리 XLSX, 데이터셋 명세, 모델 카드, 검증 보고서
+- 승인·변경·CAPA CSV, 추적성 XLSX와 manifest를 포함하는 감사 ZIP
+- 패키지와 구성 파일 SHA-256, 생성 시각, 관련 버전, 생성자 역할 기록
+- 생성 후 내용 변경 시 `INTEGRITY_FAILED`로 다운로드 차단
+
+### 역할과 권한
+
+| 역할 | 허용되는 대표 작업 |
+|---|---|
+| `TECHNICIAN` | 영상/Study 등록, 분석·복구 작업 요청 |
+| `LABELER` | 첫 번째 익명 라벨 작성 |
+| `RADIOLOGIST` | 독립 2차 판독, 결과 검토와 우선순위 수정 |
+| `ADJUDICATOR` | 불일치 합의 판독과 최종 라벨 승인 |
+| `ML_ENGINEER` | 모델 등록·검증 요청, 공정성 평가 |
+| `QA_RA` | 시험 실행, 모델 승인, CAPA와 감사 패키지 관리 |
+| `ADMIN` | 모델 배포·롤백, 규칙·연동·사용자·수동 복구 관리 |
+| `REVIEWER` | 기존 분석 검토 및 태그 수정 호환 역할 |
+
+현재 권한 검사는 포트폴리오용 `X-Role` 헤더 방식입니다. 허용되지 않은 작업은 403을 반환하지만 운영용 OIDC/OAuth2 인증과 관리자 재인증은 아직 연결되지 않았습니다.
 
 ## 주요 기능
 
@@ -174,8 +308,8 @@ npm run build
 
 현재 검증 기준:
 
-- 백엔드·ML: **28 tests passed**
-- 프론트엔드: **2 tests passed**
+- 백엔드·ML: **56 tests passed**
+- 프론트엔드: **8 tests passed**
 - TypeScript 검사 및 Vite 프로덕션 빌드 통과
 
 요구사항과 위험, 구현 파일, API, 테스트 연결은 [추적성 매트릭스](docs/traceability-matrix.md)에 기록합니다.
