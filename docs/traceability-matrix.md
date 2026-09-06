@@ -71,3 +71,13 @@ CSV 버전은 `docs/traceability-matrix.csv`이며 테스트 실행 후 결과 �
 | IXA-03 DUMMY 히트맵 차단 | RAI-05 | `gradcam.py`, `main.py` | `GET /api/v1/xray/analyses/{id}/heatmap` | `test_integrated_png_schema_reproducibility_and_heatmap_block` | PASS |
 | IXA-04 배치 제한 | RISK-ZIP-BOMB | `institution.py`, `main.py` | `POST /api/v1/xray/analyze-batch` | `test_corrupt_file_and_batch_limit` | PASS |
 | IXA-05 의료진 검토·감사 | RAI-01, RAI-08 | `ClinicalReview`, `AuditEvent` | `PATCH /api/v1/xray/analyses/{id}/review` | `test_quality_review_get_and_clinical_review_audit` | PASS |
+
+## Phase 24 종단 비교·데이터셋·모니터링
+
+| 요구사항 ID | 위험 ID | 구현 파일 | API | 테스트 ID | 결과 |
+|---|---|---|---|---|---|
+| P24-01 종단 비교·조건 제한 | RAI-02, RAI-08 | `advanced_workflows.py`, `LongitudinalComparison` | `POST /api/v1/xray/longitudinal-comparisons` | `test_longitudinal_comparison_marks_acquisition_mismatch_and_review` | PASS |
+| P24-02 의료진 수정·비자동 학습 | RAI-01, RAI-12 | `ActiveLearningCandidate`, `main.py` | `PATCH /api/v1/xray/analyses/{id}/review` | `test_clinical_correction_creates_anonymous_manual_candidate` | PASS |
+| P24-03 데이터셋 구축·환자 분할 | RAI-03, RAI-04 | `DatasetVersion`, `advanced_workflows.py` | `POST /api/v1/datasets` | `test_dataset_patient_split_duplicate_manifest_and_approval_gate` | PASS |
+| P24-04 성능 수치 생성 방지 | RAI-03, RAI-07 | `failure_metrics` | `POST /api/v1/failure-analysis` | `test_failure_analysis_does_not_invent_metrics_without_validation_data` | PASS |
+| P24-05 모델 계보·문서 초안 | RAI-07, RAI-10 | `ModelDeployment`, `main.py` | `GET /api/v1/model-monitoring`, `GET /api/v1/regulatory-documents` | `test_model_monitoring_hash_and_regulatory_documents` | PASS |
