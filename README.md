@@ -143,7 +143,10 @@ X-ray/DICOM 영상을 해부학적 촬영 부위로 분류하고, 영상 품질�
 - 일반 사용자·검토자·관리자·개발자별 교육과 객관식 퀴즈
 - 버전형 사용자 동의, 오분류 신고, Human-in-the-loop 보호
 - 책임 있는 AI 대시보드, 위험 등록부, 한국어 용어사전과 접근성 지원
-- LangGraph 기반 로컬 업무지원 Agent, 하이브리드 RAG, 근거와 trace
+- 14단계 LangGraph 기반 업무지원 Agent와 구조화된 X-ray 결과 연결
+- Qdrant dense vector와 BM25/RRF 하이브리드 검색, 장애 시 `LOCAL_FALLBACK`
+- deterministic dummy, vLLM, OpenAI-compatible sLLM adapter와 JSON Schema 검증
+- 승인·역할·기관·유효기간 필터, citation 검증, `NO_EVIDENCE/DEGRADED` 상태
 - prompt injection·개인정보 차단, 도구 allowlist, 변경 제안 후 사용자 확인
 
 ### 감사·문서·내보내기
@@ -200,15 +203,18 @@ X-ray/DICOM 영상을 해부학적 촬영 부위로 분류하고, 영상 품질�
 
 ### LangGraph 의료영상 업무지원 Agent
 
-- 실제 `StateGraph` 기반 의도 분류→문서 검색→허용 도구→답변→근거 검증 흐름
-- API 키 없이 실행되는 deterministic dummy Agent
+- 실제 `StateGraph` 기반 입력 검사→권한→Hybrid Retrieval→도구→grounded prompt→sLLM→근거·안전 검증 흐름
+- API 키 없이 실행되는 deterministic dummy Agent와 vLLM/OpenAI-compatible adapter
 - 예측·모델·시스템 상태·감사·시험·추적성에 연결된 읽기 도구 7개
-- BM25 유사 키워드 점수와 token-vector 검색을 RRF로 결합한 로컬 하이브리드 검색
+- BM25와 Qdrant dense vector 검색을 RRF로 결합하고 Qdrant 장애 시 로컬 검색으로 전환
 - 문서 ID·버전·섹션·시스템 도구가 표시되는 근거 기반 답변
+- APPROVED·역할·기관·유효기간 문서 필터와 문서별 최대 청크 제한
+- 응답 JSON Schema, 실제 검색 citation, 금지 의료 표현 검증
+- Agent 대화·검색 순위·LLM latency·상태·안전 결과 DB Trace 저장
 - 개인정보 마스킹, prompt injection 차단, 도구 allowlist와 역할 검사
 - 변경 도구 제안과 별도 사용자 확인 API 분리
-- LangGraph 노드 실행시간·도구·검색·안전 결과 trace 및 사용자 피드백 저장
-- React 업무지원 대화 화면과 합성 Agent 평가 데이터셋
+- React 업무지원 화면에서 모델·검색 모드·근거·한계·Trace ID와 degraded 상태 표시
+- 개인정보 없는 연구용 DEMO 지식 문서 7개와 색인·재색인·상태 확인 스크립트
 
 ### 합성 데이터 데모
 
@@ -421,6 +427,14 @@ docker compose up --build
 | `GET /api/agent/runs` | 권한 보호된 익명 Agent trace 조회 |
 | `POST /api/agent/actions` | 변경 도구 실행 전 제안 생성 |
 | `POST /api/agent/actions/{id}/confirm` | 사용자 확인 후 승인된 변경 수행 |
+| `POST /api/v1/agent/chat` | Qdrant/BM25 근거 기반 sLLM 업무지원 답변 생성 |
+| `GET /api/v1/agent/runs/{trace_id}` | 개인정보 없는 검색·LLM·안전 Trace 조회 |
+| `GET /api/v1/retrieval/search` | 관리자 Hybrid Retrieval 및 RRF 점수 시험 |
+| `POST /api/v1/admin/knowledge/index` | 승인 문서 검증·청크·임베딩·Qdrant 색인 |
+| `GET /api/v1/admin/knowledge/documents` | 문서 버전·승인·검색 활성 상태 조회 |
+| `DELETE /api/v1/admin/knowledge/documents/{id}/versions/{version}` | 사유를 기록하고 문서 버전 검색 비활성화 |
+| `GET /api/v1/admin/qdrant/status` | Qdrant·Collection·vector·색인 상태 조회 |
+| `GET /api/v1/admin/llm/status` | sLLM provider·모델·dummy·최근 latency 조회 |
 
 관리 API 데모 권한은 `X-Role: ADMIN`, 태그 수정은 `ADMIN` 또는 `REVIEWER` 헤더를 사용합니다. 이는 포트폴리오용 최소 RBAC 검사이며 운영 환경에서는 OIDC/OAuth2 인증으로 교체해야 합니다.
 
