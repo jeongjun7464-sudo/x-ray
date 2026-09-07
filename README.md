@@ -1,5 +1,9 @@
 # X-Ray Anatomical Region Classification & Routing System
 
+> X-ray 영상 분석, sLLM 업무지원, Qdrant 지식검색 결과를 하나의 정합성 검증 에이전트가 파트별로 검사하고, 검증 결과를 통합하여 의료진 검토·품질관리·모델 배포 판단을 지원하는 시스템입니다.
+
+영상 AI, 언어모델, 검색 결과와 운영 기록 사이의 누락·충돌을 추적하는 연구·교육용 플랫폼입니다. 정합성 검증 에이전트는 의료진의 진단이나 최종 판단을 대체하지 않으며, 검증 불가능한 항목은 통과로 처리하지 않습니다.
+
 ## X-ray AI 구축 및 분석 지원 확장
 
 새 `/api/v1/xray` 흐름은 PNG/JPG/DICOM 검증 → 메모리 내 비식별 처리 → 품질·부위 분류 → 10개 이상 의심 소견 multi-label 추론 → 불확실성/OOD → 의료진 검토 → 익명 PDF를 통합합니다. 기존 API는 그대로 유지됩니다.
@@ -10,7 +14,7 @@
 
 주요 API는 `POST /api/v1/xray/analyze`, `POST /api/v1/xray/analyze-batch`, `GET /api/v1/xray/analyses/{id}`, `/heatmap`, `/report`, `GET /api/v1/xray/worklist`, `PATCH /api/v1/xray/analyses/{id}/review`입니다.
 
-검증 결과: 백엔드·ML **62 passed**, 프론트엔드 **9 passed**, TypeScript/Vite 빌드 성공. 현재 환경에는 Docker CLI가 없어 `docker compose config`는 실행하지 못했습니다.
+검증 결과: 백엔드·ML **67 passed**, 프론트엔드 **10 passed**, TypeScript/Vite 빌드 성공. 현재 환경에는 Docker CLI가 없어 `docker compose config`는 실행하지 못했습니다.
 
 이 결과는 연구·교육용 분석 지원 정보이며 의료진의 진단이나 치료 결정을 대체하지 않습니다. 포트폴리오에서는 DICOM 보안, 다중 라벨 ML 계약, Human-in-the-loop, 모델 계보, 감사 로그와 책임 있는 AI를 강조합니다.
 
@@ -314,6 +318,41 @@ flowchart TD
 
 실제 모델이 구성되지 않은 기본 환경에서는 분류·소견 결과가 `DEMO/DUMMY`로 표시되고 실제 Grad-CAM은 비활성화됩니다. PACS, DICOMweb, 외부 악성코드 검사, 외부 큐와 객체 저장소는 설정 전까지 연결 성공으로 표시하지 않습니다. 워크리스트의 결과 확정과 수정은 권한을 가진 검토자가 수행합니다.
 
+## 통합 정합성 검증
+
+X-ray·DICOM·검토·Qdrant·RAG·sLLM·모델 배포·보고서·요구사항 시험의 누락과 충돌을 버전형 규칙으로 검사한다. 규칙 결과와 LLM 제안을 구분하며 검증할 수 없는 항목은 `NOT_VERIFIABLE`로 표시한다. HIGH/CRITICAL 실패는 승인·배포·보고서 처리를 차단하거나 사람에게 전달할 뿐 데이터를 자동 수정하지 않는다.
+
+```mermaid
+flowchart TD
+    A[검증 대상 선택] --> B[규칙 버전 불러오기]
+    B --> C[DICOM 및 AI 결과 검사]
+    B --> D[Qdrant 및 문서 검사]
+    B --> E[RAG 및 sLLM 근거 검사]
+    B --> F[요구사항 및 시험 검사]
+    B --> G[모델 및 배포 검사]
+    B --> H[보고서 정합성 검사]
+    C --> I[검증 결과 통합]
+    D --> I
+    E --> I
+    F --> I
+    G --> I
+    H --> I
+    I --> J{HIGH 또는 CRITICAL 실패}
+    J -->|예| K[승인 배포 보고서 처리 차단]
+    J -->|아니요| L{WARNING 또는 NOT_VERIFIABLE}
+    L -->|예| M[담당자 수동 검토]
+    L -->|아니요| N[규칙 검증 통과]
+    K --> O[사람의 수정 및 조치]
+    M --> O
+    O --> P[재검증]
+    P --> I
+    N --> Q[검증 결과 및 감사 로그 저장]
+```
+
+공통 상태는 `PASS`, `WARNING`, `FAIL`, `NOT_APPLICABLE`, `NOT_VERIFIABLE`, `BLOCKED`, `MANUAL_REVIEW_REQUIRED`이며 심각도는 `INFO`부터 `CRITICAL`까지다. 대시보드는 아이콘과 상태 텍스트를 함께 표시한다. 상세 규칙과 요구사항·위험·시험 연결은 [정합성 규칙 카탈로그](docs/consistency-rule-catalog.md)에 있다.
+
+주요 API는 전체/분석/지식/Agent/모델/보고서 검증, 실행·불일치 조회, 담당자 지정·해결 근거 저장과 대시보드를 제공하는 `/api/v1/consistency/*`다. Qdrant가 연결되지 않으면 orphan·missing vector를 0이나 PASS로 만들지 않고 `NOT_VERIFIABLE`로 유지한다.
+
 ## 기술 스택
 
 | 영역 | 실제 연결 기술 |
@@ -455,8 +494,8 @@ npm run build
 
 현재 검증 기준:
 
-- 백엔드·ML: **62 tests passed**
-- 프론트엔드: **9 tests passed**
+- 백엔드·ML: **67 tests passed**
+- 프론트엔드: **10 tests passed**
 - TypeScript 검사 및 Vite 프로덕션 빌드 통과
 
 요구사항과 위험, 구현 파일, API, 테스트 연결은 [추적성 매트릭스](docs/traceability-matrix.md)에 기록합니다.
@@ -509,7 +548,7 @@ Phase 20 범위는 [의료기관 연동 구현 현황](docs/phase20-implementati
 - 운영 지표, 모델 사용량, 최근 API 오류와 PACS/DB/모델/큐 상태 화면
 - 반복 오류 임계값 기반 CAPA 후보와 분석·모델·데이터 버전 추적
 
-자동시험은 현재 **백엔드·ML 62개, 프론트엔드 9개**가 통과하고 TypeScript/Vite 프로덕션 빌드가 성공한다. 실제 PACS/Orthanc 네트워크, 운영 인증, 실제 모델 Grad-CAM, 영속 메트릭 백엔드와 임상 검증은 연결되지 않았다. 따라서 이러한 항목은 구현 완료로 표시하지 않으며 실제 성능 수치도 제공하지 않는다. 자세한 내용은 [PACS 설계](docs/pacs-integration.md), [모델 릴리스](docs/model-release-process.md), [임상 검토](docs/clinical-review-workflow.md), [CAPA](docs/capa-workflow.md), [운영 모니터링](docs/operations-monitoring.md), [RBAC](docs/rbac-matrix.md)을 참고한다.
+자동시험은 현재 **백엔드·ML 67개, 프론트엔드 10개**가 통과하고 TypeScript/Vite 프로덕션 빌드가 성공한다. 실제 PACS/Orthanc 네트워크, 운영 인증, 실제 모델 Grad-CAM, 영속 메트릭 백엔드와 임상 검증은 연결되지 않았다. 따라서 이러한 항목은 구현 완료로 표시하지 않으며 실제 성능 수치도 제공하지 않는다. 자세한 내용은 [PACS 설계](docs/pacs-integration.md), [모델 릴리스](docs/model-release-process.md), [임상 검토](docs/clinical-review-workflow.md), [CAPA](docs/capa-workflow.md), [운영 모니터링](docs/operations-monitoring.md), [RBAC](docs/rbac-matrix.md)을 참고한다.
 
 ## 검증·재현·감사 대응
 

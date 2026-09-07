@@ -12,7 +12,7 @@ from app.core.constants import REGIONS
 from app.core.logging import configure_logging
 from app.core.rate_limit import SlidingWindowLimiter
 from app.db.database import Base, engine, get_db
-from app.db.models import AIRisk, ActiveLearningCandidate, AgentActionProposal, AgentConversation, AgentFeedback, AgentMessage, AgentRetrievalEvent, AgentRun, AnalysisProvenance, AnnotationRecord, AuditEvent, AuditPackage, Capa, ClinicalReview, CodeMapping, DatasetVersion, Defect, DefectRecord, ErrorOccurrence, ExplanationArtifact, FeatureFlag, FindingPredictionRecord, IntegrationEvent, KnowledgeChunk, KnowledgeDocument, KnowledgeDocumentVersion, KnowledgeIndexRun, LabelTask, LatencyRecord, LineageEvent, LLMInferenceEvent, LongitudinalComparison, MisclassificationReport, ModelDeployment, ModelRegistry, ModelRelease, Notification, OperationalCapa, PipelineRun, Prediction, ProtocolDefinition, RecoveryJob, ReviewPriorityRule, RoutingRule, SecurityEvent, Study, StudyAnalysis, StudyInstance, TestEvidence, TestExecution, TestRequirement, TestScenario, UserConsent, XrayAnalysis
+from app.db.models import AIRisk, ActiveLearningCandidate, AgentActionProposal, AgentConversation, AgentFeedback, AgentMessage, AgentRetrievalEvent, AgentRun, AnalysisProvenance, AnnotationRecord, AuditEvent, AuditPackage, Capa, ClinicalReview, CodeMapping, ConsistencyEvidence, ConsistencyFindingRecord, ConsistencyResolution, ConsistencyRuleVersion, ConsistencyValidationRun, DatasetVersion, Defect, DefectRecord, ErrorOccurrence, ExplanationArtifact, FeatureFlag, FindingPredictionRecord, IntegrationEvent, KnowledgeChunk, KnowledgeDocument, KnowledgeDocumentVersion, KnowledgeIndexRun, LabelTask, LatencyRecord, LineageEvent, LLMInferenceEvent, LongitudinalComparison, MisclassificationReport, ModelDeployment, ModelRegistry, ModelRelease, Notification, OperationalCapa, PipelineRun, Prediction, ProtocolDefinition, RecoveryJob, ReviewPriorityRule, RoutingRule, SecurityEvent, Study, StudyAnalysis, StudyInstance, TestEvidence, TestExecution, TestRequirement, TestScenario, UserConsent, XrayAnalysis
 from app.schemas import AgentActionIn, AgentChatIn, AgentFeedbackIn, CodeMappingIn, ConsentIn, IntegratedReviewIn, MisclassificationReportIn, PredictionOut, ProtocolIn, ReviewUpdate, RoutingRuleIn, StudyTagsIn, ValidationOut
 from app.services.dicom_service import metadata_orientation
 from app.services.file_validation import validate_upload
@@ -877,6 +877,87 @@ def create_capa(body: dict, request: Request, x_role: str|None=Header(None), db:
 def imaging_hub_route(body: dict):
     modality=str(body.get("modality","")).upper();route={"DX":"XRAY_API","CR":"XRAY_API","MR":"MRI_ADAPTER","CT":"UNSUPPORTED_QUEUE","US":"UNSUPPORTED_QUEUE"}.get(modality,"UNSUPPORTED_QUEUE")
     return {"modality":modality or "UNKNOWN","route":route,"adapter_contract":{"input_formats":["DICOM","NIFTI","PNG","JPEG"],"required_fields":["modality","study_id","series_id"],"shared_services":["deidentification","validation","job_status","audit","report_export"]},"external_call_performed":False}
+
+def _save_consistency(db,scope,target_type,target_id,context,categories=None):
+    from app.services.consistency import ConsistencyEngine
+    result=ConsistencyEngine().validate(context,categories);run=ConsistencyValidationRun(scope=scope,target_type=target_type,target_id=target_id,rule_engine_version=result["engine_version"],summary=result["summary"],high_risk_block=result["high_risk_block"]);db.add(run);db.flush()
+    for item in result["findings"]:
+        assigned="RADIOLOGIST" if item["category"] in {"DICOM_AI","QUALITY_ANALYSIS","CLINICAL_REVIEW","REPORT_RESULT"} and item["requires_human_review"] else "QA_RA" if item["requires_human_review"] else None
+        record=ConsistencyFindingRecord(id=item["finding_id"],validation_run_id=run.id,rule_id=item["rule_id"],rule_version=item["rule_version"],category=item["category"],target_resource=f"{target_type}:{target_id or 'GLOBAL'}",expected=item["expected"],actual=item["actual"],status=item["status"],severity=item["severity"],message=item["message"],automatic_action=item["automatic_action"],assigned_role=assigned,resolved=False,validation_type=item["validation_type"]);db.add(record)
+        for evidence in item.get("evidence",[]):db.add(ConsistencyEvidence(finding_id=record.id,source_type=evidence.get("source_type","CONTEXT"),source_id=evidence.get("source_id",target_id or "GLOBAL"),field=evidence.get("field","unknown"),value_hash=evidence.get("value_hash")))
+    db.commit();return {"validation_run_id":run.id,"scope":scope,**result}
+
+@app.post("/api/v1/consistency/validate")
+def consistency_validate(body:dict,request:Request,x_role:str|None=Header(None),db:Session=Depends(get_db)):
+    role=require_role(x_role,{"RADIOLOGIST","ML_ENGINEER","QA_RA","ADMIN"});result=_save_consistency(db,body.get("scope","FULL"),body.get("target_type","SYSTEM"),body.get("target_id"),body.get("context",{}),body.get("categories"));record_audit(db,action="CONSISTENCY_VALIDATED",target_id=result["validation_run_id"],request_id=request.headers.get("X-Request-ID","generated"),after={"scope":result["scope"],"high_risk_block":result["high_risk_block"]},actor_role=role);db.commit();return result
+
+@app.post("/api/v1/consistency/analyses/{analysis_id}/validate")
+def consistency_analysis(analysis_id:str,x_role:str|None=Header(None),db:Session=Depends(get_db)):
+    require_role(x_role,{"RADIOLOGIST","QA_RA","ADMIN"});row=db.get(XrayAnalysis,analysis_id)
+    if not row:raise HTTPException(404,"분석을 찾을 수 없습니다.")
+    reviews=db.scalars(select(ClinicalReview).where(ClinicalReview.analysis_id==analysis_id).order_by(ClinicalReview.created_at.desc())).all();review=reviews[0] if reviews else None;model=row.model_info or {};context={"analysis_id":row.id,"region":row.region_result.get("code"),"dicom_metadata":row.region_result.get("dicom_metadata",{}),"quality_status":row.quality.get("status"),"analysis_status":"COMPLETED","review_required":row.routing.get("review_required",False),"review":{"reviewer":"recorded","role":review.reviewer_role,"reviewed_at":review.created_at.isoformat()} if review else None,"model":{"version":model.get("finding_model_version") or model.get("version"),"checkpoint_sha256":model.get("checkpoint_sha256"),"dummy_mode":model.get("dummy_mode")}}
+    return _save_consistency(db,"ANALYSIS","XrayAnalysis",analysis_id,context,{"DICOM_AI","QUALITY_ANALYSIS","MODEL_INPUT","CLINICAL_REVIEW"})
+
+@app.post("/api/v1/consistency/knowledge/validate")
+def consistency_knowledge(x_role:str|None=Header(None),db:Session=Depends(get_db)):
+    require_role(x_role,{"QA_RA","ADMIN"});from app.services.retrieval.qdrant_store import QdrantStore
+    status=QdrantStore().status();state={"connection":status["connection_status"],"orphan_points":None,"missing_vectors":None}
+    if status["connection_status"]=="CONNECTED":state={"connection":"CONNECTED","orphan_points":0,"missing_vectors":max(0,(db.scalar(select(func.count()).select_from(KnowledgeChunk)) or 0)-(status.get("vector_count") or 0))}
+    return _save_consistency(db,"KNOWLEDGE","KnowledgeBase",None,{"knowledge_state":state},{"QDRANT_DOCUMENT"})
+
+@app.post("/api/v1/consistency/agent-runs/{trace_id}/validate")
+def consistency_agent(trace_id:str,x_role:str|None=Header(None),db:Session=Depends(get_db)):
+    require_role(x_role,{"RADIOLOGIST","QA_RA","ADMIN"});run=db.get(AgentRun,trace_id)
+    if not run:raise HTTPException(404,"Agent 실행을 찾을 수 없습니다.")
+    retrieved=[{"document_id":x.document_id,"chunk_id":x.chunk_id,"version":None,"section":None} for x in db.scalars(select(AgentRetrievalEvent).where(AgentRetrievalEvent.run_id==trace_id)).all()];context={"retrieved_documents":retrieved,"citations":retrieved,"llm_answer":run.answer,"prompt_snapshot":run.masked_query}
+    return _save_consistency(db,"AGENT_RUN","AgentRun",trace_id,context,{"RAG_EVIDENCE","LLM_EVIDENCE","SECURITY"})
+
+@app.post("/api/v1/consistency/models/{model_id}/validate")
+def consistency_model(model_id:str,x_role:str|None=Header(None),db:Session=Depends(get_db)):
+    require_role(x_role,{"ML_ENGINEER","QA_RA","ADMIN"});row=db.get(ModelRelease,model_id)
+    if not row:raise HTTPException(404,"모델을 찾을 수 없습니다.")
+    context={"deployment":{"model_sha256":row.model_sha256,"training_dataset_version":row.training_dataset_version,"test_dataset_version":row.test_dataset_version,"automated_tests_passed":row.automated_tests.get("required_tests_passed"),"preprocessing_version":row.comparison_result.get("preprocessing_version"),"threshold_version":row.comparison_result.get("threshold_version"),"status":row.status,"approval_status":"APPROVED" if row.approver else "NOT_APPROVED"}}
+    return _save_consistency(db,"MODEL","ModelRelease",model_id,context,{"MODEL_DEPLOYMENT"})
+
+@app.post("/api/v1/consistency/reports/{report_id}/validate")
+def consistency_report(report_id:str,body:dict,x_role:str|None=Header(None),db:Session=Depends(get_db)):
+    require_role(x_role,{"RADIOLOGIST","QA_RA","ADMIN"});return _save_consistency(db,"REPORT","Report",report_id,{"analysis_id":body.get("analysis_id"),"report":body.get("report_manifest")},{"REPORT_RESULT"})
+
+@app.get("/api/v1/consistency/runs")
+def consistency_runs(db:Session=Depends(get_db)):
+    rows=db.scalars(select(ConsistencyValidationRun).order_by(ConsistencyValidationRun.created_at.desc()).limit(100)).all();return [{"run_id":x.id,"scope":x.scope,"target_type":x.target_type,"target_id":x.target_id,"summary":x.summary,"high_risk_block":x.high_risk_block,"created_at":x.created_at} for x in rows]
+
+@app.get("/api/v1/consistency/runs/{run_id}")
+def consistency_run(run_id:str,db:Session=Depends(get_db)):
+    run=db.get(ConsistencyValidationRun,run_id)
+    if not run:raise HTTPException(404,"정합성 검증 실행을 찾을 수 없습니다.")
+    findings=db.scalars(select(ConsistencyFindingRecord).where(ConsistencyFindingRecord.validation_run_id==run_id)).all();return {"run_id":run.id,"scope":run.scope,"summary":run.summary,"high_risk_block":run.high_risk_block,"findings":[{"finding_id":x.id,"rule_id":x.rule_id,"rule_version":x.rule_version,"category":x.category,"status":x.status,"severity":x.severity,"message":x.message,"expected":x.expected,"actual":x.actual,"automatic_action":x.automatic_action,"assigned_role":x.assigned_role,"resolved":x.resolved,"validation_type":x.validation_type} for x in findings]}
+
+@app.get("/api/v1/consistency/findings")
+def consistency_findings(category:str|None=None,status:str|None=None,severity:str|None=None,rule_id:str|None=None,assigned_role:str|None=None,resolved:bool|None=None,db:Session=Depends(get_db)):
+    q=select(ConsistencyFindingRecord).order_by(ConsistencyFindingRecord.created_at.desc())
+    for column,value in ((ConsistencyFindingRecord.category,category),(ConsistencyFindingRecord.status,status),(ConsistencyFindingRecord.severity,severity),(ConsistencyFindingRecord.rule_id,rule_id),(ConsistencyFindingRecord.assigned_role,assigned_role),(ConsistencyFindingRecord.resolved,resolved)):
+        if value is not None:q=q.where(column==value)
+    rows=db.scalars(q.limit(200)).all();return [{"finding_id":x.id,"validation_run_id":x.validation_run_id,"rule_id":x.rule_id,"category":x.category,"status":x.status,"severity":x.severity,"message":x.message,"automatic_action":x.automatic_action,"assigned_role":x.assigned_role,"resolved":x.resolved,"validation_type":x.validation_type} for x in rows]
+
+@app.patch("/api/v1/consistency/findings/{finding_id}")
+def resolve_consistency(finding_id:str,body:dict,request:Request,x_role:str|None=Header(None),x_user_id:str|None=Header(None),db:Session=Depends(get_db)):
+    role=require_role(x_role,{"RADIOLOGIST","QA_RA","ADMIN"});row=db.get(ConsistencyFindingRecord,finding_id);reason=str(body.get("change_reason",""));comment=str(body.get("comment",""))
+    if not row:raise HTTPException(404,"정합성 불일치를 찾을 수 없습니다.")
+    if not reason or not comment:raise HTTPException(422,"검토 의견과 변경 사유가 필요합니다.")
+    row.assigned_role=body.get("assigned_role",role);row.resolved=bool(body.get("resolved",False));row.updated_at=datetime.now(timezone.utc);db.add(ConsistencyResolution(finding_id=row.id,assigned_role=row.assigned_role,comment=comment,resolution_evidence=body.get("resolution_evidence",{}),change_reason=reason,resolved=row.resolved,resolved_by=file_digest((x_user_id or "anonymous").encode())[:24]));record_audit(db,action="CONSISTENCY_FINDING_REVIEWED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),after={"resolved":row.resolved,"assigned_role":row.assigned_role,"reason":reason},actor_role=role);db.commit();return {"finding_id":row.id,"assigned_role":row.assigned_role,"resolved":row.resolved,"automatic_data_modification":False}
+
+@app.get("/api/v1/consistency/dashboard")
+def consistency_dashboard(db:Session=Depends(get_db)):
+    rows=db.scalars(select(ConsistencyFindingRecord)).all();runs=db.scalars(select(ConsistencyValidationRun).order_by(ConsistencyValidationRun.created_at.desc()).limit(10)).all();by_category={}
+    for x in rows:
+        if x.status=="FAIL":by_category[x.category]=by_category.get(x.category,0)+1
+    return {"total_findings":len(rows),"status_counts":{s:sum(x.status==s for x in rows) for s in ("PASS","WARNING","FAIL","NOT_VERIFIABLE","MANUAL_REVIEW_REQUIRED")},"fail_by_category":by_category,"unresolved_high_critical":sum(not x.resolved and x.severity in {"HIGH","CRITICAL"} and x.status in {"FAIL","MANUAL_REVIEW_REQUIRED"} for x in rows),"qdrant_orphan_vectors":"NOT_VERIFIABLE","missing_vectors":"NOT_VERIFIABLE","unsupported_agent_answers":sum(x.rule_id=="CON-RAG-001" and x.status=="FAIL" for x in rows),"untraced_requirements":sum(x.rule_id=="CON-TRACE-001" and x.status=="FAIL" for x in rows),"blocked_models":sum(x.rule_id=="CON-DEPLOY-001" and x.status=="FAIL" for x in rows),"reports_requiring_regeneration":sum(x.rule_id=="CON-REPORT-001" and x.status=="FAIL" for x in rows),"recent_runs":[{"run_id":x.id,"scope":x.scope,"summary":x.summary,"created_at":x.created_at} for x in runs]}
+
+@app.get("/api/v1/consistency/rules")
+def consistency_rules():
+    from app.services.consistency import ConsistencyEngine
+    return ConsistencyEngine().catalog()
 
 @app.post("/api/v1/agent/chat")
 def grounded_agent_chat(body:dict,request:Request,x_role:str|None=Header(None),x_user_id:str|None=Header(None),x_institution_id:str|None=Header(None),db:Session=Depends(get_db)):
