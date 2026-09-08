@@ -4,4 +4,4 @@ React/Vite 클라이언트가 FastAPI에 multipart 영상을 전송한다. 검�
 
 `Browser → React → FastAPI → validation/DICOM → inference → review policy → SQLAlchemy → PostgreSQL|SQLite`
 
-실제 운영에서는 객체 저장소 격리, 악성 파일 검사, 인증·권한(RBAC), 감사 로그, KMS, 네트워크 분리, 모니터링을 별도 추가해야 한다.
+로컬 서명 세션과 역할 기반 권한 검사는 구현되어 있다. 실제 운영에서는 객체 저장소 격리, 악성 파일 검사, 조직 IdP/OIDC·MFA, 중앙 세션 폐기, KMS, 네트워크 분리와 운영 모니터링을 추가해야 한다.

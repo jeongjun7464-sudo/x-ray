@@ -10,15 +10,37 @@
 
 - 실제 모델: 승인 체크포인트, 체크포인트 해시와 검증 자료가 구성된 경우에만 사용하며 실제 Grad-CAM만 제공합니다.
 - 기본 모델: `dummy-finding-v1`은 파일 SHA-256 기반 재현용 DUMMY이며 임상 성능을 의미하지 않고 히트맵을 제공하지 않습니다.
-- PACS/Orthanc, 운영 인증, 실제 소견 체크포인트: `NOT_CONFIGURED`.
+- PACS/Orthanc, 외부 IdP/OIDC, 실제 소견 체크포인트: `NOT_CONFIGURED`. 로컬 서명 세션과 RBAC은 구현되어 있습니다.
 
 주요 API는 `POST /api/v1/xray/analyze`, `POST /api/v1/xray/analyze-batch`, `GET /api/v1/xray/analyses/{id}`, `/heatmap`, `/report`, `GET /api/v1/xray/worklist`, `PATCH /api/v1/xray/analyses/{id}/review`입니다.
 
-검증 결과: 백엔드·ML **67 passed**, 프론트엔드 **10 passed**, TypeScript/Vite 빌드 성공. 현재 환경에는 Docker CLI가 없어 `docker compose config`는 실행하지 못했습니다.
+검증 결과: 백엔드·ML **75 passed**, 프론트엔드 **13 passed**, TypeScript/Vite 빌드 성공. 현재 환경에는 Docker CLI가 없어 `docker compose config`는 실행하지 못했습니다.
 
 이 결과는 연구·교육용 분석 지원 정보이며 의료진의 진단이나 치료 결정을 대체하지 않습니다. 포트폴리오에서는 DICOM 보안, 다중 라벨 ML 계약, Human-in-the-loop, 모델 계보, 감사 로그와 책임 있는 AI를 강조합니다.
 
 > Phase 23 adds AI literacy, versioned consent, measured latency, model/dataset cards, misclassification reporting, Human-in-the-loop controls and a responsible AI risk dashboard. The bundled model remains explicitly **DEMO / DUMMY** and is not for diagnosis or treatment decisions.
+
+## 서명 세션 인증과 RBAC
+
+백엔드는 HMAC-SHA256 서명 세션의 만료·변조·허용 역할을 검증하고, 인증된 `Principal`을 기존 역할별 API 권한 검사에 전달합니다. 프런트엔드는 토큰을 `sessionStorage`에만 보관하고 모든 API 요청에 Bearer 헤더를 붙이며, 401은 재로그인, 403은 권한 부족으로 구분합니다. 토큰 원문과 서명 비밀값은 감사·보안 이벤트에 저장하지 않습니다.
+
+```mermaid
+flowchart LR
+    UI[React UI] -->|demo login| Auth[POST /api/auth/demo-token]
+    Auth -->|short-lived signed token| UI
+    UI -->|Authorization: Bearer| MW[Authentication middleware]
+    MW -->|verified Principal| RBAC[Role permission check]
+    RBAC --> API[Protected API]
+    MW -->|invalid or expired| U401[401 reauthentication]
+    RBAC -->|insufficient role| U403[403 permission denied]
+```
+
+- 개발 기본값: 기존 `X-Role` 호환이 가능하지만 서명 세션이 우선합니다.
+- 보안 모드: `AUTH_ENFORCED=true`이면 공개 경로 외에는 유효한 Bearer 세션이 필수이고 `X-Role` 위조는 무시합니다.
+- 운영 조건: 32자 이상의 외부 주입 `AUTH_SESSION_SECRET`, 데모 토큰 및 legacy 헤더 비활성화가 필요합니다. 소스에는 운영 비밀값이 없습니다.
+- 구현 범위: 로컬 서명·만료·RBAC·보안 이벤트는 `LOCAL`; 조직 IdP, MFA, 중앙 폐기 목록은 `NOT_CONFIGURED`입니다.
+
+자세한 설정과 위협 경계는 [Phase 26 인증 설계](docs/phase26-authentication-rbac.md)를 참고하세요.
 
 ## 공동 개발
 
@@ -175,7 +197,7 @@ X-ray/DICOM 영상을 해부학적 촬영 부위로 분류하고, 영상 품질�
 | `ADMIN` | 모델 배포·롤백, 규칙·연동·사용자·수동 복구 관리 |
 | `REVIEWER` | 기존 분석 검토 및 태그 수정 호환 역할 |
 
-현재 권한 검사는 포트폴리오용 `X-Role` 헤더 방식입니다. 허용되지 않은 작업은 403을 반환하지만 운영용 OIDC/OAuth2 인증과 관리자 재인증은 아직 연결되지 않았습니다.
+현재 권한 검사는 HMAC-SHA256 서명 세션의 Principal을 우선합니다. 개발 호환 모드에서만 `X-Role`을 지원하고, 강제 인증 모드에서는 위조 가능한 역할 헤더를 무시합니다. 허용되지 않은 작업은 403을 반환하지만 운영용 OIDC/OAuth2, MFA와 관리자 재인증은 아직 연결되지 않았습니다.
 
 ## 주요 기능
 
@@ -475,7 +497,7 @@ docker compose up --build
 | `GET /api/v1/admin/qdrant/status` | Qdrant·Collection·vector·색인 상태 조회 |
 | `GET /api/v1/admin/llm/status` | sLLM provider·모델·dummy·최근 latency 조회 |
 
-관리 API 데모 권한은 `X-Role: ADMIN`, 태그 수정은 `ADMIN` 또는 `REVIEWER` 헤더를 사용합니다. 이는 포트폴리오용 최소 RBAC 검사이며 운영 환경에서는 OIDC/OAuth2 인증으로 교체해야 합니다.
+관리 API는 서명 세션의 `ADMIN`, 태그 수정은 `ADMIN` 또는 `REVIEWER` 역할을 사용합니다. 아래 legacy 헤더 예시는 개발 호환 모드에 한정되며 강제 인증 모드에서는 Bearer 세션을 사용해야 합니다.
 
 ```bash
 curl -F "file=@synthetic-xray.png;type=image/png" http://localhost:8000/api/predictions
@@ -548,7 +570,7 @@ Phase 20 범위는 [의료기관 연동 구현 현황](docs/phase20-implementati
 - 운영 지표, 모델 사용량, 최근 API 오류와 PACS/DB/모델/큐 상태 화면
 - 반복 오류 임계값 기반 CAPA 후보와 분석·모델·데이터 버전 추적
 
-자동시험은 현재 **백엔드·ML 67개, 프론트엔드 10개**가 통과하고 TypeScript/Vite 프로덕션 빌드가 성공한다. 실제 PACS/Orthanc 네트워크, 운영 인증, 실제 모델 Grad-CAM, 영속 메트릭 백엔드와 임상 검증은 연결되지 않았다. 따라서 이러한 항목은 구현 완료로 표시하지 않으며 실제 성능 수치도 제공하지 않는다. 자세한 내용은 [PACS 설계](docs/pacs-integration.md), [모델 릴리스](docs/model-release-process.md), [임상 검토](docs/clinical-review-workflow.md), [CAPA](docs/capa-workflow.md), [운영 모니터링](docs/operations-monitoring.md), [RBAC](docs/rbac-matrix.md)을 참고한다.
+자동시험은 현재 **백엔드·ML 75개, 프론트엔드 13개**가 통과하고 TypeScript/Vite 프로덕션 빌드가 성공한다. 실제 PACS/Orthanc 네트워크, 외부 IdP/OIDC, 실제 모델 Grad-CAM, 영속 메트릭 백엔드와 임상 검증은 연결되지 않았다. 따라서 이러한 항목은 구현 완료로 표시하지 않으며 실제 성능 수치도 제공하지 않는다. 자세한 내용은 [PACS 설계](docs/pacs-integration.md), [모델 릴리스](docs/model-release-process.md), [임상 검토](docs/clinical-review-workflow.md), [CAPA](docs/capa-workflow.md), [운영 모니터링](docs/operations-monitoring.md), [RBAC](docs/rbac-matrix.md)을 참고한다.
 
 ## 검증·재현·감사 대응
 

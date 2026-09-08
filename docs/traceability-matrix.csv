@@ -1,4 +1,8 @@
 requirement_id,risk_id,implementation,api,test_id,result
+AUTH-REQ-01,R-AUTH-BYPASS,backend/app/core/auth.py;backend/app/main.py,POST /api/auth/demo-token,TEST-AUTH-SIGNED-SESSION,PASS
+AUTH-REQ-02,R-STOLEN-TOKEN,backend/app/core/auth.py;frontend/src/api.ts,GET /api/auth/me,TEST-AUTH-EXPIRY,PASS
+AUTH-REQ-03,R-ROLE-FORGERY,backend/app/main.py,protected APIs,TEST-AUTH-ENFORCED-RBAC,PASS
+AUTH-REQ-04,R-SECRET-LEAK,backend/app/services/consistency/auth_checks.py,security events,TEST-AUTH-NO-TOKEN-LOG,PASS
 DIF-01,R-ROUTE-01,backend/app/services/differentiators.py,POST /api/predictions,test_synthetic_dicom_and_ood,PASS
 DIF-02,R-QUALITY-01,backend/app/services/quality.py,POST /api/predictions,test_quality_flags_flat_image,PASS
 DIF-03,R-OOD-01,backend/app/services/differentiators.py,POST /api/predictions,test_synthetic_dicom_and_ood,PASS

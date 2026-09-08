@@ -1,5 +1,12 @@
 # Changelog
 
+## Phase 26 — Signed Session Authentication & RBAC
+
+- Added short-lived HMAC-SHA256 sessions, verified principals and enforced protected-route middleware.
+- Added demo login, current-session and stateless logout APIs with secret-safe security events.
+- Added React `sessionStorage` session handling, shared authenticated requests and 401/403 UI states.
+- Added AUTH-001..AUTH-007 deployment consistency checks, tests and security documentation.
+
 ## Phase 23 — AI Literacy & Responsible AI
 
 - Added versioned consent, transparency, model/dataset cards and Korean glossary.
