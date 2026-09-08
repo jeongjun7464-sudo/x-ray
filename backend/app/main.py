@@ -12,7 +12,7 @@ from app.core.constants import REGIONS
 from app.core.logging import configure_logging
 from app.core.rate_limit import SlidingWindowLimiter
 from app.db.database import Base, SessionLocal, engine, get_db
-from app.db.models import AIRisk, ActiveLearningCandidate, AgentActionProposal, AgentConversation, AgentFeedback, AgentMessage, AgentRetrievalEvent, AgentRun, AnalysisProvenance, AnnotationRecord, AuditEvent, AuditPackage, Capa, ClinicalReview, CodeMapping, ConsistencyEvidence, ConsistencyFindingRecord, ConsistencyResolution, ConsistencyRuleVersion, ConsistencyValidationRun, DatasetVersion, Defect, DefectRecord, ErrorOccurrence, ExplanationArtifact, FeatureFlag, FindingPredictionRecord, IntegrationEvent, KnowledgeChunk, KnowledgeDocument, KnowledgeDocumentVersion, KnowledgeIndexRun, LabelTask, LatencyRecord, LineageEvent, LLMInferenceEvent, LongitudinalComparison, MisclassificationReport, ModelDeployment, ModelRegistry, ModelRelease, Notification, OperationalCapa, PipelineRun, Prediction, ProtocolDefinition, RecoveryJob, ReviewPriorityRule, RoutingRule, SecurityEvent, Study, StudyAnalysis, StudyInstance, TestEvidence, TestExecution, TestRequirement, TestScenario, UserConsent, XrayAnalysis
+from app.db.models import AIRisk, ActiveLearningCandidate, AgentActionProposal, AgentConversation, AgentFeedback, AgentMessage, AgentRetrievalEvent, AgentRun, AnalysisProvenance, AnnotationRecord, AuditEvent, AuditPackage, Capa, ClinicalReview, CodeMapping, ConsistencyEvidence, ConsistencyFindingRecord, ConsistencyResolution, ConsistencyRuleVersion, ConsistencyValidationRun, DatasetVersion, Defect, DefectRecord, DriftBaseline, DriftEvaluation, ErrorOccurrence, ExplanationArtifact, FeatureFlag, FindingPredictionRecord, IntegrationEvent, KnowledgeChunk, KnowledgeDocument, KnowledgeDocumentVersion, KnowledgeIndexRun, LabelTask, LatencyRecord, LineageEvent, LLMInferenceEvent, LongitudinalComparison, MisclassificationReport, ModelDeployment, ModelPerformanceWindow, ModelRegistry, ModelRelease, MonitoringAlert, MonitoringSnapshot, Notification, OperationalCapa, PipelineRun, Prediction, ProtocolDefinition, RecoveryJob, ReleaseBlockDecision, ReviewPriorityRule, RoutingRule, SecurityEvent, Study, StudyAnalysis, StudyInstance, TestEvidence, TestExecution, TestRequirement, TestScenario, UserConsent, XrayAnalysis
 from app.schemas import AgentActionIn, AgentChatIn, AgentFeedbackIn, CodeMappingIn, ConsentIn, IntegratedReviewIn, MisclassificationReportIn, PredictionOut, ProtocolIn, ReviewUpdate, RoutingRuleIn, StudyTagsIn, ValidationOut
 from app.services.dicom_service import metadata_orientation
 from app.services.file_validation import validate_upload
@@ -29,6 +29,7 @@ from app.services.responsible_ai import CONSENT_ITEMS, CONSENT_VERSION, DATASET_
 from app.services.advanced_workflows import DISCLAIMER as RESEARCH_DISCLAIMER, build_manifest, comparison_compatibility, failure_metrics
 from app.services.operations import DEFAULT_THRESHOLDS, priority_decision, validate_clinical_context
 from app.services.pacs import integration_status
+from app.services.drift_monitoring import evaluate_drift
 from app.core.auth import ALLOWED_ROLES, AuthenticationError, current_principal, extract_bearer_token, issue_session_token, principal_dict, reset_current_principal, set_current_principal, validate_secret, verify_session_token
 from xray_findings import FindingInferenceEngine
 from xray_findings.postprocess import near_threshold
@@ -627,6 +628,92 @@ def update_operational_capa(capa_id:str,body:dict,request:Request,x_role:str|Non
         if body["status"] in {"APPROVED","CLOSED"} and not body.get("approved_by"):raise HTTPException(422,"승인 또는 종료에는 승인자가 필요합니다.")
         row.status=body["status"];row.approved_by=body.get("approved_by",row.approved_by)
     record_audit(db,action="CAPA_UPDATED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),after={"status":row.status,"owner":row.owner},actor_role=role);db.commit();return {"capa_id":row.id,"status":row.status,"error_type":row.error_type,"occurrence_count":row.occurrence_count,"analysis_ids":row.analysis_ids,"root_cause":row.root_cause,"corrective_action":row.corrective_action,"preventive_action":row.preventive_action,"owner":row.owner,"due_date":row.due_date,"effectiveness_check":row.effectiveness_check,"approved_by":row.approved_by}
+
+def _iso(value):return value.isoformat() if value else None
+def _snapshot_out(x):return {"snapshot_id":x.id,"model_version":x.model_version,"dataset_version":x.dataset_version,"institution_id":x.institution_id,"window_start":_iso(x.window_start),"window_end":_iso(x.window_end),"sample_size":x.sample_size,"metrics":x.metrics,"status":x.status,"created_at":_iso(x.created_at)}
+def _evaluation_out(x):return {"evaluation_id":x.id,"baseline_id":x.baseline_id,"snapshot_id":x.snapshot_id,"model_version":x.model_version,"dataset_version":x.dataset_version,"institution_id":x.institution_id,"window_start":_iso(x.window_start),"window_end":_iso(x.window_end),"sample_size":x.sample_size,"drift_scores":x.drift_scores,"severity":x.severity,"status":x.status,"evidence":x.evidence,"created_at":_iso(x.created_at)}
+def _monitoring_metrics(db):
+    analyses=db.scalars(select(XrayAnalysis)).all();latencies=[x.total_ms for x in db.scalars(select(LatencyRecord)).all()];reviews=db.scalars(select(ClinicalReview)).all();llm=db.scalars(select(LLMInferenceEvent)).all();retrieval=db.scalars(select(AgentRetrievalEvent)).all();consistency=db.scalars(select(ConsistencyValidationRun)).all();total=len(analyses)
+    rate=lambda count,denominator:count/denominator if denominator else None
+    distribution=lambda values:{key:values.count(key) for key in sorted(set(values)) if key not in {None,""}}
+    regions=[(x.region_result or {}).get("class") or (x.region_result or {}).get("anatomical_region") or "UNKNOWN" for x in analyses];equipment=[(x.model_info or {}).get("equipment_id") for x in analyses];institutions=[(x.model_info or {}).get("institution_id") for x in analyses];views=[(x.region_result or {}).get("view_position") for x in analyses];models=[(x.model_info or {}).get("finding_model_version","UNKNOWN") for x in analyses]
+    return {"total_requests":total,"success_count":total if total else None,"failure_count":0 if total else None,"success_rate":rate(total,total),"average_latency_ms":sum(latencies)/len(latencies) if latencies else None,"p50_latency_ms":percentile(latencies,.5) if latencies else None,"p95_latency_ms":percentile(latencies,.95) if latencies else None,"p99_latency_ms":percentile(latencies,.99) if latencies else None,"quality_reject_rate":rate(sum((x.quality or {}).get("status")=="REJECT" for x in analyses),total),"ood_rate":rate(sum((x.uncertainty or {}).get("ood_status") not in {None,"IN_DISTRIBUTION"} for x in analyses),total),"unknown_rate":rate(sum(region=="UNKNOWN" for region in regions),total),"review_rate":rate(sum(bool((x.routing or {}).get("review_required")) for x in analyses),total),"correction_rate":rate(sum((r.before_value or {})!=(r.after_value or {}) for r in reviews),len(reviews)),"region_distribution":distribution(regions),"equipment_distribution":distribution(equipment),"institution_distribution":distribution(institutions),"view_distribution":distribution(views),"model_usage":distribution(models),"api_error_rate":rate(ops_metrics["errors"],ops_metrics["requests"]),"sllm_failure_rate":rate(sum(x.finish_reason not in {"stop","completed"} for x in llm),len(llm)),"retrieval_degradation_rate":rate(sum(not x.selected for x in retrieval),len(retrieval)),"consistency_failure_rate":rate(sum(x.high_risk_block for x in consistency),len(consistency))}
+
+@app.get("/api/v1/monitoring/dashboard")
+def monitoring_dashboard(db:Session=Depends(get_db)):
+    latest=db.scalar(select(MonitoringSnapshot).order_by(MonitoringSnapshot.created_at.desc()));evaluations=db.scalars(select(DriftEvaluation).order_by(DriftEvaluation.created_at.desc()).limit(20)).all();alerts=db.scalars(select(MonitoringAlert).where(MonitoringAlert.status!="RESOLVED").order_by(MonitoringAlert.created_at.desc())).all();capas=db.scalars(select(OperationalCapa).where(OperationalCapa.status=="CANDIDATE").order_by(OperationalCapa.created_at.desc())).all();critical=any(x.status=="CRITICAL" for x in evaluations)
+    return {"status":latest.status if latest else "NOT_MEASURED","reason":None if latest else "생성된 모니터링 스냅샷이 없습니다.","latest_snapshot":_snapshot_out(latest) if latest else None,"drift_summary":{"STABLE":sum(x.status=="STABLE" for x in evaluations),"WARNING":sum(x.status=="WARNING" for x in evaluations),"CRITICAL":sum(x.status=="CRITICAL" for x in evaluations),"INSUFFICIENT_DATA":sum(x.status=="INSUFFICIENT_DATA" for x in evaluations)},"alerts":[{"alert_id":x.id,"type":x.alert_type,"severity":x.severity,"status":x.status,"assigned_role":x.assigned_role} for x in alerts],"release_status":"RELEASE_BLOCKED" if critical else "NOT_MEASURED" if not evaluations else "ELIGIBLE_FOR_HUMAN_REVIEW","capa_candidates":[{"capa_id":x.id,"problem_type":x.error_type,"occurrence_count":x.occurrence_count,"status":x.status} for x in capas],"last_measured_at":_iso(latest.created_at) if latest else None,"clinical_performance":"NOT_MEASURED"}
+
+@app.post("/api/v1/monitoring/snapshots")
+def create_monitoring_snapshot(body:dict,request:Request,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    role=require_role(x_role,{"ML_ENGINEER","QA_RA","ADMIN"});start=datetime.fromisoformat(body.get("window_start")) if body.get("window_start") else datetime.now(timezone.utc);end=datetime.fromisoformat(body.get("window_end")) if body.get("window_end") else datetime.now(timezone.utc);metrics=body.get("metrics") or _monitoring_metrics(db);sample=max(0,int(body.get("sample_size",metrics.get("total_requests") or 0)));status="NOT_MEASURED" if sample==0 else "MEASURED"
+    row=MonitoringSnapshot(model_version=str(body.get("model_version","UNKNOWN")),dataset_version=str(body.get("dataset_version","UNKNOWN")),institution_id=str(body.get("institution_id","ANONYMOUS")),window_start=start,window_end=end,sample_size=sample,metrics=metrics,status=status);db.add(row);record_audit(db,action="MONITORING_SNAPSHOT_CREATED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),after={"model_version":row.model_version,"dataset_version":row.dataset_version,"sample_size":sample,"status":status},actor_role=role);db.commit();return _snapshot_out(row)
+
+@app.get("/api/v1/monitoring/snapshots")
+def list_monitoring_snapshots(model_version:str|None=None,institution_id:str|None=None,status:str|None=None,window_start:str|None=None,window_end:str|None=None,db:Session=Depends(get_db)):
+    q=select(MonitoringSnapshot)
+    if model_version:q=q.where(MonitoringSnapshot.model_version==model_version)
+    if institution_id:q=q.where(MonitoringSnapshot.institution_id==institution_id)
+    if status:q=q.where(MonitoringSnapshot.status==status)
+    if window_start:q=q.where(MonitoringSnapshot.window_end>=datetime.fromisoformat(window_start))
+    if window_end:q=q.where(MonitoringSnapshot.window_start<=datetime.fromisoformat(window_end))
+    return [_snapshot_out(x) for x in db.scalars(q.order_by(MonitoringSnapshot.created_at.desc()).limit(200)).all()]
+
+@app.post("/api/v1/drift/baselines")
+def create_drift_baseline(body:dict,request:Request,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    role=require_role(x_role,{"ML_ENGINEER","QA_RA"});sample=max(0,int(body.get("sample_size",0)));metrics=body.get("metrics") or {}
+    if not body.get("model_version") or not body.get("dataset_version") or not metrics:raise HTTPException(422,"모델·데이터셋 버전과 기준 지표가 필요합니다.")
+    row=DriftBaseline(model_version=body["model_version"],dataset_version=body["dataset_version"],institution_id=body.get("institution_id","ANONYMOUS"),sample_size=sample,metrics=metrics,approved_by_role=role);db.add(row);record_audit(db,action="DRIFT_BASELINE_REGISTERED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),after={"sample_size":sample,"model_version":row.model_version,"dataset_version":row.dataset_version},actor_role=role);db.commit();return {"baseline_id":row.id,"status":row.status,"sample_size":sample,"model_version":row.model_version,"dataset_version":row.dataset_version}
+
+@app.post("/api/v1/drift/evaluate")
+def evaluate_drift_window(body:dict,request:Request,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    role=require_role(x_role,{"ML_ENGINEER","QA_RA","ADMIN"});baseline=db.get(DriftBaseline,body.get("baseline_id"));snapshot=db.get(MonitoringSnapshot,body.get("snapshot_id"))
+    if not baseline or not snapshot:raise HTTPException(404,"기준선 또는 스냅샷을 찾을 수 없습니다.")
+    if baseline.model_version!=snapshot.model_version or baseline.dataset_version!=snapshot.dataset_version:raise HTTPException(409,detail={"code":"MONITORING_VERSION_MISMATCH","message":"모델 또는 데이터셋 버전이 일치하지 않습니다."})
+    result=evaluate_drift(baseline.metrics,snapshot.metrics,baseline.sample_size,snapshot.sample_size,int(body.get("min_samples",30)),float(body.get("warning_threshold",.1)),float(body.get("critical_threshold",.25)));row=DriftEvaluation(baseline_id=baseline.id,snapshot_id=snapshot.id,model_version=snapshot.model_version,dataset_version=snapshot.dataset_version,institution_id=snapshot.institution_id,window_start=snapshot.window_start,window_end=snapshot.window_end,sample_size=snapshot.sample_size,drift_scores=result.get("scores",{}),severity=result["severity"],status=result["status"],evidence={"reason":result["reason"],"thresholds":result.get("thresholds",{}),"performance_claim":False});db.add(row);db.flush()
+    if row.status in {"WARNING","CRITICAL"}:
+        alert=MonitoringAlert(evaluation_id=row.id,alert_type="DATA_DRIFT",severity=row.status,evidence={"scores":row.drift_scores,"model_version":row.model_version,"dataset_version":row.dataset_version});db.add(alert);db.flush();related=db.scalars(select(MonitoringAlert).where(MonitoringAlert.alert_type==alert.alert_type,MonitoringAlert.severity==alert.severity)).all();repeat=sum((x.evidence or {}).get("model_version")==row.model_version for x in related);threshold=2 if row.status=="CRITICAL" else 3
+        capa=db.scalar(select(OperationalCapa).where(OperationalCapa.error_type==f"REPEATED_{row.status}_DATA_DRIFT",OperationalCapa.model_version==row.model_version,OperationalCapa.status.not_in(["CLOSED","REJECTED"])))
+        if repeat>=threshold and not capa:db.add(OperationalCapa(error_type=f"REPEATED_{row.status}_DATA_DRIFT",occurrence_count=repeat,model_version=row.model_version,dataset_version=row.dataset_version,status="CANDIDATE",owner="QA_RA"))
+        elif capa:capa.occurrence_count=repeat
+    record_audit(db,action="DRIFT_EVALUATED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),after={"status":row.status,"sample_size":row.sample_size},actor_role=role);db.commit();return _evaluation_out(row)
+
+@app.get("/api/v1/drift/evaluations")
+def list_drift_evaluations(status:str|None=None,model_version:str|None=None,db:Session=Depends(get_db)):
+    q=select(DriftEvaluation)
+    if status:q=q.where(DriftEvaluation.status==status)
+    if model_version:q=q.where(DriftEvaluation.model_version==model_version)
+    return [_evaluation_out(x) for x in db.scalars(q.order_by(DriftEvaluation.created_at.desc()).limit(200)).all()]
+
+@app.get("/api/v1/monitoring/alerts")
+def list_monitoring_alerts(db:Session=Depends(get_db)):
+    rows=db.scalars(select(MonitoringAlert).where(MonitoringAlert.status!="RESOLVED").order_by(MonitoringAlert.created_at.desc())).all();return [{"alert_id":x.id,"evaluation_id":x.evaluation_id,"alert_type":x.alert_type,"severity":x.severity,"status":x.status,"assigned_role":x.assigned_role,"evidence":x.evidence,"created_at":_iso(x.created_at)} for x in rows]
+
+@app.patch("/api/v1/monitoring/alerts/{alert_id}")
+def update_monitoring_alert(alert_id:str,body:dict,request:Request,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    role=require_role(x_role,{"QA_RA","ADMIN"});row=db.get(MonitoringAlert,alert_id);reason=str(body.get("change_reason","")).strip()
+    if not row:raise HTTPException(404,"경고를 찾을 수 없습니다.")
+    if not reason:raise HTTPException(422,"변경 사유가 필요합니다.")
+    status=body.get("status",row.status)
+    if status not in {"OPEN","ACKNOWLEDGED","RESOLVED"}:raise HTTPException(422,"지원하지 않는 경고 상태입니다.")
+    row.status=status;row.assigned_role=body.get("assigned_role",row.assigned_role);row.change_reason=reason;row.resolved_at=datetime.now(timezone.utc) if status=="RESOLVED" else None;record_audit(db,action="MONITORING_ALERT_UPDATED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),after={"status":status,"assigned_role":row.assigned_role},reason=reason,actor_role=role);db.commit();return {"alert_id":row.id,"status":row.status,"assigned_role":row.assigned_role,"change_reason":row.change_reason}
+
+@app.post("/api/v1/releases/{release_id}/monitoring-gate")
+def monitoring_release_gate(release_id:str,body:dict,request:Request,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
+    role=require_role(x_role,{"ML_ENGINEER","QA_RA","ADMIN"});release=db.get(ModelRelease,release_id)
+    if not release:raise HTTPException(404,"모델 릴리스를 찾을 수 없습니다.")
+    reasons=[];latest=db.scalar(select(DriftEvaluation).where(DriftEvaluation.model_version==release.version).order_by(DriftEvaluation.created_at.desc()));snapshot=db.scalar(select(MonitoringSnapshot).where(MonitoringSnapshot.model_version==release.version).order_by(MonitoringSnapshot.created_at.desc()));recent_consistency=db.scalar(select(ConsistencyValidationRun).order_by(ConsistencyValidationRun.created_at.desc()))
+    if release.status not in {"APPROVED","DEPLOYED"}:reasons.append("MODEL_NOT_APPROVED")
+    if not snapshot or not latest:reasons.append("MONITORING_EVIDENCE_MISSING")
+    if latest and latest.status=="CRITICAL":
+        reasons.append("CRITICAL_DATA_DRIFT");critical=float((latest.evidence or {}).get("thresholds",{}).get("critical",.25))
+        for field,code in (("ood_rate","OOD_RATE_SPIKE"),("correction_rate","CLINICIAN_CORRECTION_RATE_SPIKE"),("quality_reject_rate","QUALITY_REJECT_RATE_SPIKE")):
+            if float((latest.drift_scores or {}).get(field,0))>=critical:reasons.append(code)
+    if body.get("checkpoint_sha256") and body["checkpoint_sha256"]!=release.model_sha256:reasons.append("CHECKPOINT_HASH_MISMATCH")
+    if body.get("dataset_version") and body["dataset_version"]!=release.test_dataset_version:reasons.append("VALIDATION_DATASET_VERSION_MISMATCH")
+    if latest and latest.dataset_version!=release.test_dataset_version:reasons.append("MONITORING_DATASET_VERSION_MISMATCH")
+    if recent_consistency and recent_consistency.high_risk_block:reasons.append("RECENT_CONSISTENCY_FAILURE")
+    blocked=bool(reasons);actions=["QA_RA_REVIEW","RESOLVE_MONITORING_FINDINGS"] if blocked else ["HUMAN_RELEASE_REVIEW_REQUIRED"];decision=ReleaseBlockDecision(release_id=release.id,model_version=release.version,dataset_version=release.test_dataset_version,blocked=blocked,reason_codes=sorted(set(reasons)),evidence={"evaluation_id":latest.id if latest else None,"snapshot_id":snapshot.id if snapshot else None},required_actions=actions,assigned_role="QA_RA");db.add(decision);record_audit(db,action="MONITORING_RELEASE_GATE_EVALUATED",target_id=release.id,request_id=request.headers.get("X-Request-ID","generated"),after={"blocked":blocked,"reason_codes":decision.reason_codes},actor_role=role);db.commit();return {"blocked":blocked,"reason_codes":decision.reason_codes,"evidence":decision.evidence,"required_actions":actions,"assigned_role":decision.assigned_role,"evaluated_at":_iso(decision.evaluated_at),"model_version":decision.model_version,"dataset_version":decision.dataset_version,"automatic_deployment":False}
 @app.patch("/api/predictions/{prediction_id}/review", response_model=PredictionOut)
 def review(prediction_id: str, body: ReviewUpdate, request: Request, db: Session=Depends(get_db)):
     if body.corrected_region not in REGIONS: raise HTTPException(422,"지원하지 않는 분류입니다.")
