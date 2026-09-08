@@ -38,4 +38,17 @@ describe('signed session API client', () => {
     expect(handler).toHaveBeenCalledOnce();
     clearSession();
   });
+  it('does not force a Content-Type boundary for FormData', async () => {
+    let sentHeaders = new Headers();
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => { sentHeaders = new Headers(init?.headers); return { ok: true, status: 200 } as Response }));
+    await apiFetch('/api/upload', { method: 'POST', body: new FormData() });
+    expect(sentHeaders.has('Content-Type')).toBe(false);
+  });
+  it('emits permission denied without deleting a valid session on 403', async () => {
+    setSession({ access_token: 'signed-token', expires_at: Math.floor(Date.now() / 1000) + 60, role: 'USER' });
+    const handler = vi.fn(); window.addEventListener('auth:forbidden', handler, { once: true });
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 403 } as Response)));
+    await apiFetch('/api/admin');
+    expect(handler).toHaveBeenCalledOnce(); expect(getSession()?.role).toBe('USER');
+  });
 });
