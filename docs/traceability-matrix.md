@@ -49,6 +49,15 @@ CSV 버전은 `docs/traceability-matrix.csv`이며 테스트 실행 후 결과 �
 | REQ-20-09 | RISK-ZIP-BOMB | `inspect_zip`, `POST /api/batches/inspect` | TEST-20-ZIP | PASS |
 | REQ-20-16 | RISK-UNCERTAINTY | `uncertainty`, `POST /api/uncertainty` | TEST-20-UNCERTAINTY | PASS |
 | REQ-20-22 | RISK-UNAUTHORIZED-ADMIN | `GET /api/admin/dashboard`, `App.tsx` | TEST-20-RBAC | PASS |
+| AUTH-REQ-01 | R-AUTH-BYPASS | `core/auth.py`, `main.py`, `POST /api/auth/demo-token` | TEST-AUTH-SIGNED-SESSION | PASS |
+| AUTH-REQ-02 | R-STOLEN-TOKEN | `core/auth.py`, `frontend/src/api.ts`, `GET /api/auth/me` | TEST-AUTH-EXPIRY | PASS |
+| AUTH-REQ-03 | R-ROLE-FORGERY | `main.py`, `docs/rbac-matrix.md`, protected APIs | TEST-AUTH-ENFORCED-RBAC | PASS |
+| AUTH-REQ-04 | R-SECRET-LEAK | `main.py`, `auth_checks.py`, security events | TEST-AUTH-NO-TOKEN-LOG | PASS |
+| AUTH-REQ-05 | R-AUTH-SEMANTICS | `main.py`, `api.ts`, AUTH-008 | TEST-AUTH-STATUS | PASS |
+| AUTH-REQ-06 | R-CLIENT-TOKEN-LEAK | `api.ts`, `AuthPanel.tsx` | TEST-AUTH-PANEL | PASS |
+| MON-REQ-01 | R-STALE-MONITORING | `MonitoringSnapshot`, `DriftBaseline`, `drift_monitoring.py` | TEST-P27-MON | PASS |
+| MON-REQ-02 | R-UNCONTROLLED-DRIFT | `DriftEvaluation`, `ReleaseBlockDecision`, monitoring gate API | TEST-P27-GATE | PASS |
+| MON-REQ-03 | R-FABRICATED-METRIC | `MonitoringDashboard.tsx`, MON-001..010 | TEST-P27-SAFETY | PASS |
 
 ## Phase 23 책임 있는 AI
 

@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     retrieval_top_k: int = 8
     retrieval_final_k: int = 5
     rrf_k: int = 60
+    auth_enforced: bool = False
+    auth_allow_legacy_headers: bool = True
+    auth_demo_tokens_enabled: bool = True
+    auth_session_secret: str = ""
+    auth_session_ttl_seconds: int = 900
+    auth_public_paths: str = "/api/health,/api/model/info,/api/classes,/docs,/openapi.json,/redoc"
     agent_max_steps: int = 12
     agent_timeout_seconds: int = 15
     agent_retention_days: int = 30

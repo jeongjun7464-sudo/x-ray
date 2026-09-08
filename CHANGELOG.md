@@ -1,5 +1,20 @@
 # Changelog
 
+## Phase 27 — Model Monitoring & Drift
+
+- Added versioned monitoring snapshots, approved baselines, Jensen–Shannon drift evaluation and unresolved alerts.
+- Added evidence-based release blocking and repeated-warning CAPA candidates without automatic approval or deployment.
+- Added MON-001..010 consistency rules and a React monitoring dashboard with explicit missing-data states.
+
+## Phase 26 — Signed Session Authentication & RBAC
+
+- Added short-lived HMAC-SHA256 sessions, verified principals and enforced protected-route middleware.
+- Added demo login, current-session and stateless logout APIs with secret-safe security events.
+- Added React `sessionStorage` session handling, shared authenticated requests and 401/403 UI states.
+- Added AUTH-001..AUTH-007 deployment consistency checks, tests and security documentation.
+- Completed issued-at and 60–3600 second TTL validation, production-safe secret checks, logout auditing and AUTH-008 HTTP status semantics.
+- Added the reusable anonymous demo AuthPanel and common login/me/logout client helpers without rendering or logging token values.
+
 ## Phase 23 — AI Literacy & Responsible AI
 
 - Added versioned consent, transparency, model/dataset cards and Korean glossary.
