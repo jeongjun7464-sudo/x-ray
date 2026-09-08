@@ -1,5 +1,11 @@
 # Changelog
 
+## Phase 27 — Model Monitoring & Drift
+
+- Added versioned monitoring snapshots, approved baselines, Jensen–Shannon drift evaluation and unresolved alerts.
+- Added evidence-based release blocking and repeated-warning CAPA candidates without automatic approval or deployment.
+- Added MON-001..010 consistency rules and a React monitoring dashboard with explicit missing-data states.
+
 ## Phase 26 — Signed Session Authentication & RBAC
 
 - Added short-lived HMAC-SHA256 sessions, verified principals and enforced protected-route middleware.

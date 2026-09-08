@@ -55,6 +55,9 @@ CSV 버전은 `docs/traceability-matrix.csv`이며 테스트 실행 후 결과 �
 | AUTH-REQ-04 | R-SECRET-LEAK | `main.py`, `auth_checks.py`, security events | TEST-AUTH-NO-TOKEN-LOG | PASS |
 | AUTH-REQ-05 | R-AUTH-SEMANTICS | `main.py`, `api.ts`, AUTH-008 | TEST-AUTH-STATUS | PASS |
 | AUTH-REQ-06 | R-CLIENT-TOKEN-LEAK | `api.ts`, `AuthPanel.tsx` | TEST-AUTH-PANEL | PASS |
+| MON-REQ-01 | R-STALE-MONITORING | `MonitoringSnapshot`, `DriftBaseline`, `drift_monitoring.py` | TEST-P27-MON | PASS |
+| MON-REQ-02 | R-UNCONTROLLED-DRIFT | `DriftEvaluation`, `ReleaseBlockDecision`, monitoring gate API | TEST-P27-GATE | PASS |
+| MON-REQ-03 | R-FABRICATED-METRIC | `MonitoringDashboard.tsx`, MON-001..010 | TEST-P27-SAFETY | PASS |
 
 ## Phase 23 책임 있는 AI
 

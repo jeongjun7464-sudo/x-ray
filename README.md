@@ -14,7 +14,7 @@
 
 주요 API는 `POST /api/v1/xray/analyze`, `POST /api/v1/xray/analyze-batch`, `GET /api/v1/xray/analyses/{id}`, `/heatmap`, `/report`, `GET /api/v1/xray/worklist`, `PATCH /api/v1/xray/analyses/{id}/review`입니다.
 
-검증 결과: 백엔드·ML **77 passed**, 프론트엔드 **18 passed**, TypeScript/Vite 빌드 성공. 현재 환경에는 Docker CLI가 없어 `docker compose config`는 실행하지 못했습니다.
+검증 결과: 백엔드·ML **82 passed**, 프론트엔드 **21 passed**, TypeScript/Vite 빌드 성공. 현재 환경에는 Docker CLI가 없어 `docker compose config`는 실행하지 못했습니다.
 
 이 결과는 연구·교육용 분석 지원 정보이며 의료진의 진단이나 치료 결정을 대체하지 않습니다. 포트폴리오에서는 DICOM 보안, 다중 라벨 ML 계약, Human-in-the-loop, 모델 계보, 감사 로그와 책임 있는 AI를 강조합니다.
 
@@ -41,6 +41,10 @@ flowchart LR
 - 구현 범위: 로컬 서명·만료·RBAC·보안 이벤트는 `LOCAL`; 조직 IdP, MFA, 중앙 폐기 목록은 `NOT_CONFIGURED`입니다.
 
 자세한 설정과 위협 경계는 [Phase 26 인증 설계](docs/phase26-authentication-rbac.md)를 참고하세요.
+
+## 모델 운영 모니터링과 드리프트
+
+Phase 27은 익명 집계 스냅샷, 승인 기준선, Jensen–Shannon/비율 변화 평가, 경고 처리, Release Gate와 CAPA 후보를 연결합니다. 표본이 없거나 부족하면 `NOT_MEASURED`/`INSUFFICIENT_DATA`로 표시하며 실제 정답 없이 임상 성능 저하를 주장하지 않습니다. CRITICAL 변화는 자동 배포가 아니라 QA/RA 검토가 필요한 배포 차단 사유입니다. 자세한 내용은 [Phase 27 설계](docs/phase27-model-monitoring-drift.md)를 참고하세요.
 
 ## 공동 개발
 
@@ -516,8 +520,8 @@ npm run build
 
 현재 검증 기준:
 
-- 백엔드·ML: **67 tests passed**
-- 프론트엔드: **10 tests passed**
+- 백엔드·ML: **82 tests passed**
+- 프론트엔드: **21 tests passed**
 - TypeScript 검사 및 Vite 프로덕션 빌드 통과
 
 요구사항과 위험, 구현 파일, API, 테스트 연결은 [추적성 매트릭스](docs/traceability-matrix.md)에 기록합니다.
@@ -570,7 +574,7 @@ Phase 20 범위는 [의료기관 연동 구현 현황](docs/phase20-implementati
 - 운영 지표, 모델 사용량, 최근 API 오류와 PACS/DB/모델/큐 상태 화면
 - 반복 오류 임계값 기반 CAPA 후보와 분석·모델·데이터 버전 추적
 
-자동시험은 현재 **백엔드·ML 77개, 프론트엔드 18개**가 통과하고 TypeScript/Vite 프로덕션 빌드가 성공한다. 실제 PACS/Orthanc 네트워크, 외부 IdP/OIDC, 실제 모델 Grad-CAM, 영속 메트릭 백엔드와 임상 검증은 연결되지 않았다. 따라서 이러한 항목은 구현 완료로 표시하지 않으며 실제 성능 수치도 제공하지 않는다. 자세한 내용은 [PACS 설계](docs/pacs-integration.md), [모델 릴리스](docs/model-release-process.md), [임상 검토](docs/clinical-review-workflow.md), [CAPA](docs/capa-workflow.md), [운영 모니터링](docs/operations-monitoring.md), [RBAC](docs/rbac-matrix.md)을 참고한다.
+자동시험은 현재 **백엔드·ML 82개, 프론트엔드 21개**가 통과하고 TypeScript/Vite 프로덕션 빌드가 성공한다. 실제 PACS/Orthanc 네트워크, 외부 IdP/OIDC, 실제 모델 Grad-CAM, 영속 메트릭 백엔드와 임상 검증은 연결되지 않았다. 따라서 이러한 항목은 구현 완료로 표시하지 않으며 실제 성능 수치도 제공하지 않는다. 자세한 내용은 [PACS 설계](docs/pacs-integration.md), [모델 릴리스](docs/model-release-process.md), [임상 검토](docs/clinical-review-workflow.md), [CAPA](docs/capa-workflow.md), [운영 모니터링](docs/operations-monitoring.md), [RBAC](docs/rbac-matrix.md)을 참고한다.
 
 ## 검증·재현·감사 대응
 
