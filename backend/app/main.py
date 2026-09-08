@@ -11,7 +11,7 @@ from app.core.config import settings
 from app.core.constants import REGIONS
 from app.core.logging import configure_logging
 from app.core.rate_limit import SlidingWindowLimiter
-from app.db.database import Base, engine, get_db
+from app.db.database import Base, SessionLocal, engine, get_db
 from app.db.models import AIRisk, ActiveLearningCandidate, AgentActionProposal, AgentConversation, AgentFeedback, AgentMessage, AgentRetrievalEvent, AgentRun, AnalysisProvenance, AnnotationRecord, AuditEvent, AuditPackage, Capa, ClinicalReview, CodeMapping, ConsistencyEvidence, ConsistencyFindingRecord, ConsistencyResolution, ConsistencyRuleVersion, ConsistencyValidationRun, DatasetVersion, Defect, DefectRecord, ErrorOccurrence, ExplanationArtifact, FeatureFlag, FindingPredictionRecord, IntegrationEvent, KnowledgeChunk, KnowledgeDocument, KnowledgeDocumentVersion, KnowledgeIndexRun, LabelTask, LatencyRecord, LineageEvent, LLMInferenceEvent, LongitudinalComparison, MisclassificationReport, ModelDeployment, ModelRegistry, ModelRelease, Notification, OperationalCapa, PipelineRun, Prediction, ProtocolDefinition, RecoveryJob, ReviewPriorityRule, RoutingRule, SecurityEvent, Study, StudyAnalysis, StudyInstance, TestEvidence, TestExecution, TestRequirement, TestScenario, UserConsent, XrayAnalysis
 from app.schemas import AgentActionIn, AgentChatIn, AgentFeedbackIn, CodeMappingIn, ConsentIn, IntegratedReviewIn, MisclassificationReportIn, PredictionOut, ProtocolIn, ReviewUpdate, RoutingRuleIn, StudyTagsIn, ValidationOut
 from app.services.dicom_service import metadata_orientation
@@ -29,6 +29,7 @@ from app.services.responsible_ai import CONSENT_ITEMS, CONSENT_VERSION, DATASET_
 from app.services.advanced_workflows import DISCLAIMER as RESEARCH_DISCLAIMER, build_manifest, comparison_compatibility, failure_metrics
 from app.services.operations import DEFAULT_THRESHOLDS, priority_decision, validate_clinical_context
 from app.services.pacs import integration_status
+from app.core.auth import AuthenticationError, current_principal, extract_bearer_token, issue_session_token, principal_dict, reset_current_principal, set_current_principal, verify_session_token
 from xray_findings import FindingInferenceEngine
 from xray_findings.postprocess import near_threshold
 
@@ -43,6 +44,7 @@ ops_metrics={"requests":0,"errors":0,"recent_errors":[]}
 ops_metrics={"requests":0,"errors":0,"recent_errors":[]}
 @app.on_event("startup")
 def startup():
+    if settings.auth_enforced and len(settings.auth_session_secret)<32:raise RuntimeError("AUTH_SESSION_SECRET must be at least 32 characters when AUTH_ENFORCED=true")
     Base.metadata.create_all(bind=engine)
     with next(get_db()) as db:
         defaults={"CHEST":(["PA","AP"],["LATERAL"]),"KNEE":(["AP","LATERAL"],[]),"HAND_WRIST":(["PA","OBLIQUE","LATERAL"],[]),"ANKLE":(["AP","MORTISE","LATERAL"],[]),"CERVICAL_SPINE":(["AP","LATERAL"],[])}
@@ -57,18 +59,42 @@ def startup():
 startup()
 
 def require_role(role: str | None, allowed: set[str]):
-    current=(role or "USER").upper()
-    if current not in allowed: raise HTTPException(403,"이 작업을 수행할 권한이 없습니다.")
+    principal=current_principal();current=principal.role if principal else ((role or "USER").upper() if settings.auth_allow_legacy_headers and not settings.auth_enforced else "USER")
+    allowed={x.upper() for x in allowed}
+    if current not in allowed: raise HTTPException(403,detail={"code":"AUTHORIZATION_DENIED","message":"이 작업을 수행할 권한이 없습니다."})
     return current
 @app.middleware("http")
 async def security(request: Request, call_next):
     request_id=request.headers.get("X-Request-ID",uuid.uuid4().hex)
+    public={x.strip() for x in settings.auth_public_paths.split(",") if x.strip()};principal_token=None
+    if settings.auth_enforced and request.url.path not in public and not request.url.path.startswith(("/docs/","/redoc/")):
+        try:
+            principal=verify_session_token(extract_bearer_token(request.headers.get("Authorization")),settings.auth_session_secret);request.state.principal=principal;principal_token=set_current_principal(principal)
+        except AuthenticationError as exc:
+            logger.warning("authentication_failed",extra={"request_id":request_id,"reason_code":exc.code,"path":request.url.path})
+            try:
+                with SessionLocal() as db:db.add(SecurityEvent(event_type="SESSION_EXPIRED" if exc.code=="SESSION_EXPIRED" else "AUTHENTICATION_FAILED",request_id=request_id,details={"failure_code":exc.code,"path":request.url.path}));db.commit()
+            except Exception:logger.exception("authentication_event_store_failed",extra={"request_id":request_id})
+            return JSONResponse(status_code=401,content={"error":{"code":"UNAUTHORIZED","message":"유효한 인증 세션이 필요합니다."}},headers={"WWW-Authenticate":"Bearer","X-Request-ID":request_id})
+    elif request.headers.get("Authorization"):
+        try:
+            principal=verify_session_token(extract_bearer_token(request.headers.get("Authorization")),settings.auth_session_secret);request.state.principal=principal;principal_token=set_current_principal(principal)
+        except AuthenticationError:pass
     client=request.client.host if request.client else "unknown"
     if request.url.path.startswith("/api/") and not limiter.allow(client):
+        if principal_token is not None:reset_current_principal(principal_token)
         return JSONResponse(status_code=429,content={"error":{"code":"RATE_LIMITED","message":"요청이 너무 많습니다. 잠시 후 다시 시도하세요."}},headers={"Retry-After":"60","X-Request-ID":request_id})
-    started=time.perf_counter(); response=await call_next(request);ops_metrics["requests"]+=1
+    started=time.perf_counter()
+    try:response=await call_next(request)
+    finally:
+        if principal_token is not None:reset_current_principal(principal_token)
+    ops_metrics["requests"]+=1
     if response.status_code>=400:
         ops_metrics["errors"]+=1;ops_metrics["recent_errors"]=(ops_metrics["recent_errors"]+[{"path":request.url.path,"status":response.status_code,"at":datetime.now(timezone.utc).isoformat()}])[-20:]
+    if response.status_code==403:
+        try:
+            with SessionLocal() as db:db.add(SecurityEvent(event_type="AUTHORIZATION_DENIED",request_id=request_id,details={"path":request.url.path,"role":getattr(getattr(request.state,"principal",None),"role",None) or "LEGACY_OR_ANONYMOUS"}));db.commit()
+        except Exception:logger.exception("authorization_event_store_failed",extra={"request_id":request_id})
     response.headers["X-Content-Type-Options"]="nosniff"; response.headers["X-Frame-Options"]="DENY"; response.headers["Referrer-Policy"]="no-referrer"; response.headers["Content-Security-Policy"]="default-src 'none'; frame-ancestors 'none'"; response.headers["X-Request-ID"]=request_id
     logger.info("request_completed",extra={"request_id":request_id,"status":response.status_code,"duration_ms":int((time.perf_counter()-started)*1000)})
     return response
@@ -80,6 +106,22 @@ def health(): return {"status":"ok","dummy_mode":settings.dummy_mode}
 def model_info(): return {"version":settings.model_version,"dummy_mode":settings.dummy_mode,"device":"cpu","disclaimer":"연구·교육용이며 진단용이 아닙니다."}
 @app.get("/api/classes")
 def classes(): return [{"class":k,"display_name":v} for k,v in REGIONS.items()]
+@app.post("/api/auth/demo-token")
+def demo_session_token(body:dict,request:Request,db:Session=Depends(get_db)):
+    if not settings.auth_demo_tokens_enabled or settings.environment.lower() in {"production","prod"}:raise HTTPException(404,"데모 세션 발급이 비활성화되어 있습니다.")
+    try:token,principal=issue_session_token(str(body.get("anonymous_user_id","")),str(body.get("role","USER")),settings.auth_session_secret,settings.auth_session_ttl_seconds)
+    except AuthenticationError as exc:
+        if exc.code=="AUTH_SECRET_NOT_CONFIGURED":raise HTTPException(503,"데모 세션 서명키가 설정되지 않았습니다.")
+        raise HTTPException(422,"익명 사용자 ID 또는 역할이 올바르지 않습니다.")
+    request_id=request.headers.get("X-Request-ID",uuid.uuid4().hex);safe={"subject":principal.subject,"role":principal.role,"path":request.url.path};db.add(SecurityEvent(event_type="DEMO_TOKEN_REQUESTED",request_id=request_id,details=safe));db.add(SecurityEvent(event_type="AUTH_TOKEN_ISSUED",request_id=request_id,details=safe|{"expires_at":principal.expires_at}));db.commit();return {"access_token":token,"token_type":"bearer","expires_at":principal.expires_at,"role":principal.role,"status":"DEMO_SESSION_ONLY","warning":"실제 비밀번호 또는 기관 인증이 아닌 포트폴리오 시연용 세션입니다."}
+@app.get("/api/auth/me")
+def auth_me(x_role:str|None=Header(None),x_actor:str|None=Header(None)):
+    principal=current_principal()
+    if principal:return principal_dict(principal)
+    if settings.auth_allow_legacy_headers and not settings.auth_enforced:return {"subject":(x_actor or "anonymous")[:64],"role":(x_role or "USER").upper(),"expires_at":None,"authentication_method":"LEGACY_HEADER_COMPATIBILITY"}
+    raise HTTPException(401,"유효한 인증 세션이 필요합니다.",headers={"WWW-Authenticate":"Bearer"})
+@app.post("/api/auth/logout")
+def auth_logout():return {"status":"CLIENT_TOKEN_DISCARD_REQUIRED","stateless":True,"server_revocation_performed":False,"revocation_adapter":"NOT_CONFIGURED","message":"클라이언트 sessionStorage의 토큰을 폐기하세요."}
 @app.post("/api/images/validate", response_model=ValidationOut)
 async def validate(file: UploadFile=File(...)):
     data=await file.read(); v=validate_upload(file.filename or "", file.content_type or "", data)

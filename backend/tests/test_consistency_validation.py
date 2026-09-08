@@ -22,4 +22,4 @@ def test_model_and_report_high_risk_failures_block_without_modification():
     report=client.post("/api/v1/consistency/reports/report-1/validate",headers={"X-Role":"QA_RA"},json={"analysis_id":"analysis-1","report_manifest":{"analysis_id":"wrong","research_or_dummy_label":False}}).json();assert report["high_risk_block"] and "MARK_REPORT_REGENERATION_REQUIRED" in report["automatic_actions"]
     assert client.post("/api/v1/consistency/models/missing/validate",headers={"X-Role":"ML_ENGINEER"}).status_code==404
 def test_rule_catalog_uses_required_prefixes():
-    rules=client.get("/api/v1/consistency/rules").json();assert rules and all(x["rule_id"].startswith("CON-") and x["version"] for x in rules)
+    rules=client.get("/api/v1/consistency/rules").json();assert rules and all(x["rule_id"].startswith(("CON-","AUTH-")) and x["version"] for x in rules)
