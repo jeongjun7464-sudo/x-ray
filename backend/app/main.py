@@ -29,7 +29,7 @@ from app.services.responsible_ai import CONSENT_ITEMS, CONSENT_VERSION, DATASET_
 from app.services.advanced_workflows import DISCLAIMER as RESEARCH_DISCLAIMER, build_manifest, comparison_compatibility, failure_metrics
 from app.services.operations import DEFAULT_THRESHOLDS, priority_decision, validate_clinical_context
 from app.services.pacs import integration_status
-from app.core.auth import AuthenticationError, current_principal, extract_bearer_token, issue_session_token, principal_dict, reset_current_principal, set_current_principal, verify_session_token
+from app.core.auth import ALLOWED_ROLES, AuthenticationError, current_principal, extract_bearer_token, issue_session_token, principal_dict, reset_current_principal, set_current_principal, validate_secret, verify_session_token
 from xray_findings import FindingInferenceEngine
 from xray_findings.postprocess import near_threshold
 
@@ -44,7 +44,10 @@ ops_metrics={"requests":0,"errors":0,"recent_errors":[]}
 ops_metrics={"requests":0,"errors":0,"recent_errors":[]}
 @app.on_event("startup")
 def startup():
-    if settings.auth_enforced and len(settings.auth_session_secret)<32:raise RuntimeError("AUTH_SESSION_SECRET must be at least 32 characters when AUTH_ENFORCED=true")
+    if settings.environment.lower() in {"production","prod"} and not settings.auth_enforced:raise RuntimeError("AUTH_ENFORCED=true is required in production")
+    if settings.auth_enforced:
+        try:validate_secret(settings.auth_session_secret,reject_example=settings.environment.lower() in {"production","prod"})
+        except AuthenticationError as exc:raise RuntimeError("A non-example AUTH_SESSION_SECRET of at least 32 characters is required when authentication is enforced") from exc
     Base.metadata.create_all(bind=engine)
     with next(get_db()) as db:
         defaults={"CHEST":(["PA","AP"],["LATERAL"]),"KNEE":(["AP","LATERAL"],[]),"HAND_WRIST":(["PA","OBLIQUE","LATERAL"],[]),"ANKLE":(["AP","MORTISE","LATERAL"],[]),"CERVICAL_SPINE":(["AP","LATERAL"],[])}
@@ -59,15 +62,31 @@ def startup():
 startup()
 
 def require_role(role: str | None, allowed: set[str]):
+    if not allowed:raise RuntimeError("require_role requires at least one allowed role")
     principal=current_principal();current=principal.role if principal else ((role or "USER").upper() if settings.auth_allow_legacy_headers and not settings.auth_enforced else "USER")
     allowed={x.upper() for x in allowed}
+    if not allowed.issubset(ALLOWED_ROLES):raise RuntimeError("require_role contains an unknown role")
     if current not in allowed: raise HTTPException(403,detail={"code":"AUTHORIZATION_DENIED","message":"이 작업을 수행할 권한이 없습니다."})
     return current
+def get_current_principal():
+    principal=current_principal()
+    if principal is None:raise HTTPException(401,detail={"code":"UNAUTHORIZED","message":"유효한 인증 세션이 필요합니다."},headers={"WWW-Authenticate":"Bearer"})
+    return principal
+def require_roles(*allowed_roles:str):
+    allowed={role.upper() for role in allowed_roles}
+    if not allowed or not allowed.issubset(ALLOWED_ROLES):raise RuntimeError("require_roles requires known roles")
+    def dependency():
+        principal=get_current_principal()
+        if principal.role not in allowed:raise HTTPException(403,detail={"code":"AUTHORIZATION_DENIED","message":"이 작업을 수행할 권한이 없습니다."})
+        return principal
+    return dependency
 @app.middleware("http")
 async def security(request: Request, call_next):
     request_id=request.headers.get("X-Request-ID",uuid.uuid4().hex)
     public={x.strip() for x in settings.auth_public_paths.split(",") if x.strip()};principal_token=None
-    if settings.auth_enforced and request.url.path not in public and not request.url.path.startswith(("/docs/","/redoc/")):
+    demo_public=request.url.path=="/api/auth/demo-token" and settings.auth_demo_tokens_enabled and settings.environment.lower() not in {"production","prod"}
+    preflight=request.method=="OPTIONS"
+    if settings.auth_enforced and not preflight and not demo_public and request.url.path not in public and not request.url.path.startswith(("/docs/","/redoc/")):
         try:
             principal=verify_session_token(extract_bearer_token(request.headers.get("Authorization")),settings.auth_session_secret);request.state.principal=principal;principal_token=set_current_principal(principal)
         except AuthenticationError as exc:
@@ -113,15 +132,17 @@ def demo_session_token(body:dict,request:Request,db:Session=Depends(get_db)):
     except AuthenticationError as exc:
         if exc.code=="AUTH_SECRET_NOT_CONFIGURED":raise HTTPException(503,"데모 세션 서명키가 설정되지 않았습니다.")
         raise HTTPException(422,"익명 사용자 ID 또는 역할이 올바르지 않습니다.")
-    request_id=request.headers.get("X-Request-ID",uuid.uuid4().hex);safe={"subject":principal.subject,"role":principal.role,"path":request.url.path};db.add(SecurityEvent(event_type="DEMO_TOKEN_REQUESTED",request_id=request_id,details=safe));db.add(SecurityEvent(event_type="AUTH_TOKEN_ISSUED",request_id=request_id,details=safe|{"expires_at":principal.expires_at}));db.commit();return {"access_token":token,"token_type":"bearer","expires_at":principal.expires_at,"role":principal.role,"status":"DEMO_SESSION_ONLY","warning":"실제 비밀번호 또는 기관 인증이 아닌 포트폴리오 시연용 세션입니다."}
+    request_id=request.headers.get("X-Request-ID",uuid.uuid4().hex);safe={"subject":principal.subject,"role":principal.role,"path":request.url.path};db.add(SecurityEvent(event_type="DEMO_TOKEN_REQUESTED",request_id=request_id,details=safe));db.add(SecurityEvent(event_type="AUTH_TOKEN_ISSUED",request_id=request_id,details=safe|{"expires_at":principal.expires_at}));db.commit();return {"access_token":token,"token_type":"bearer","subject":principal.subject,"expires_at":principal.expires_at,"role":principal.role,"status":"DEMO_SESSION_ONLY","disclaimer":"기관 인증을 대체하지 않는 연구·교육용 세션입니다."}
 @app.get("/api/auth/me")
 def auth_me(x_role:str|None=Header(None),x_actor:str|None=Header(None)):
     principal=current_principal()
     if principal:return principal_dict(principal)
-    if settings.auth_allow_legacy_headers and not settings.auth_enforced:return {"subject":(x_actor or "anonymous")[:64],"role":(x_role or "USER").upper(),"expires_at":None,"authentication_method":"LEGACY_HEADER_COMPATIBILITY"}
+    if settings.auth_allow_legacy_headers and not settings.auth_enforced:return {"subject":(x_actor or "anonymous")[:64],"role":(x_role or "USER").upper(),"issued_at":None,"expires_at":None,"authentication_method":"LEGACY_HEADER_COMPATIBILITY"}
     raise HTTPException(401,"유효한 인증 세션이 필요합니다.",headers={"WWW-Authenticate":"Bearer"})
 @app.post("/api/auth/logout")
-def auth_logout():return {"status":"CLIENT_TOKEN_DISCARD_REQUIRED","stateless":True,"server_revocation_performed":False,"revocation_adapter":"NOT_CONFIGURED","message":"클라이언트 sessionStorage의 토큰을 폐기하세요."}
+def auth_logout(request:Request,db:Session=Depends(get_db)):
+    principal=current_principal();request_id=request.headers.get("X-Request-ID",uuid.uuid4().hex);db.add(SecurityEvent(event_type="LOGOUT_REQUESTED",request_id=request_id,details={"subject":principal.subject if principal else "anonymous","role":principal.role if principal else "USER","path":request.url.path}));db.commit()
+    return {"status":"CLIENT_TOKEN_DISCARD_REQUIRED","stateless":True,"server_revocation_performed":False,"revocation_adapter":"NOT_CONFIGURED","message":"클라이언트 sessionStorage의 토큰을 폐기하세요."}
 @app.post("/api/images/validate", response_model=ValidationOut)
 async def validate(file: UploadFile=File(...)):
     data=await file.read(); v=validate_upload(file.filename or "", file.content_type or "", data)

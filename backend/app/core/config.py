@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     auth_demo_tokens_enabled: bool = True
     auth_session_secret: str = ""
     auth_session_ttl_seconds: int = 900
-    auth_public_paths: str = "/api/health,/api/model/info,/api/classes,/api/auth/demo-token,/docs,/openapi.json,/redoc"
+    auth_public_paths: str = "/api/health,/api/model/info,/api/classes,/docs,/openapi.json,/redoc"
     agent_max_steps: int = 12
     agent_timeout_seconds: int = 15
     agent_retention_days: int = 30
