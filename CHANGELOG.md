@@ -6,6 +6,8 @@
 - Added demo login, current-session and stateless logout APIs with secret-safe security events.
 - Added React `sessionStorage` session handling, shared authenticated requests and 401/403 UI states.
 - Added AUTH-001..AUTH-007 deployment consistency checks, tests and security documentation.
+- Completed issued-at and 60–3600 second TTL validation, production-safe secret checks, logout auditing and AUTH-008 HTTP status semantics.
+- Added the reusable anonymous demo AuthPanel and common login/me/logout client helpers without rendering or logging token values.
 
 ## Phase 23 — AI Literacy & Responsible AI
 

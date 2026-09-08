@@ -14,7 +14,7 @@
 
 주요 API는 `POST /api/v1/xray/analyze`, `POST /api/v1/xray/analyze-batch`, `GET /api/v1/xray/analyses/{id}`, `/heatmap`, `/report`, `GET /api/v1/xray/worklist`, `PATCH /api/v1/xray/analyses/{id}/review`입니다.
 
-검증 결과: 백엔드·ML **75 passed**, 프론트엔드 **13 passed**, TypeScript/Vite 빌드 성공. 현재 환경에는 Docker CLI가 없어 `docker compose config`는 실행하지 못했습니다.
+검증 결과: 백엔드·ML **77 passed**, 프론트엔드 **18 passed**, TypeScript/Vite 빌드 성공. 현재 환경에는 Docker CLI가 없어 `docker compose config`는 실행하지 못했습니다.
 
 이 결과는 연구·교육용 분석 지원 정보이며 의료진의 진단이나 치료 결정을 대체하지 않습니다. 포트폴리오에서는 DICOM 보안, 다중 라벨 ML 계약, Human-in-the-loop, 모델 계보, 감사 로그와 책임 있는 AI를 강조합니다.
 
@@ -570,7 +570,7 @@ Phase 20 범위는 [의료기관 연동 구현 현황](docs/phase20-implementati
 - 운영 지표, 모델 사용량, 최근 API 오류와 PACS/DB/모델/큐 상태 화면
 - 반복 오류 임계값 기반 CAPA 후보와 분석·모델·데이터 버전 추적
 
-자동시험은 현재 **백엔드·ML 75개, 프론트엔드 13개**가 통과하고 TypeScript/Vite 프로덕션 빌드가 성공한다. 실제 PACS/Orthanc 네트워크, 외부 IdP/OIDC, 실제 모델 Grad-CAM, 영속 메트릭 백엔드와 임상 검증은 연결되지 않았다. 따라서 이러한 항목은 구현 완료로 표시하지 않으며 실제 성능 수치도 제공하지 않는다. 자세한 내용은 [PACS 설계](docs/pacs-integration.md), [모델 릴리스](docs/model-release-process.md), [임상 검토](docs/clinical-review-workflow.md), [CAPA](docs/capa-workflow.md), [운영 모니터링](docs/operations-monitoring.md), [RBAC](docs/rbac-matrix.md)을 참고한다.
+자동시험은 현재 **백엔드·ML 77개, 프론트엔드 18개**가 통과하고 TypeScript/Vite 프로덕션 빌드가 성공한다. 실제 PACS/Orthanc 네트워크, 외부 IdP/OIDC, 실제 모델 Grad-CAM, 영속 메트릭 백엔드와 임상 검증은 연결되지 않았다. 따라서 이러한 항목은 구현 완료로 표시하지 않으며 실제 성능 수치도 제공하지 않는다. 자세한 내용은 [PACS 설계](docs/pacs-integration.md), [모델 릴리스](docs/model-release-process.md), [임상 검토](docs/clinical-review-workflow.md), [CAPA](docs/capa-workflow.md), [운영 모니터링](docs/operations-monitoring.md), [RBAC](docs/rbac-matrix.md)을 참고한다.
 
 ## 검증·재현·감사 대응
 

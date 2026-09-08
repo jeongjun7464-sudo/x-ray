@@ -53,6 +53,8 @@ CSV 버전은 `docs/traceability-matrix.csv`이며 테스트 실행 후 결과 �
 | AUTH-REQ-02 | R-STOLEN-TOKEN | `core/auth.py`, `frontend/src/api.ts`, `GET /api/auth/me` | TEST-AUTH-EXPIRY | PASS |
 | AUTH-REQ-03 | R-ROLE-FORGERY | `main.py`, `docs/rbac-matrix.md`, protected APIs | TEST-AUTH-ENFORCED-RBAC | PASS |
 | AUTH-REQ-04 | R-SECRET-LEAK | `main.py`, `auth_checks.py`, security events | TEST-AUTH-NO-TOKEN-LOG | PASS |
+| AUTH-REQ-05 | R-AUTH-SEMANTICS | `main.py`, `api.ts`, AUTH-008 | TEST-AUTH-STATUS | PASS |
+| AUTH-REQ-06 | R-CLIENT-TOKEN-LEAK | `api.ts`, `AuthPanel.tsx` | TEST-AUTH-PANEL | PASS |
 
 ## Phase 23 책임 있는 AI
 
