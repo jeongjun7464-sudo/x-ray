@@ -46,6 +46,12 @@ flowchart LR
 
 Phase 27은 익명 집계 스냅샷, 승인 기준선, Jensen–Shannon/비율 변화 평가, 경고 처리, Release Gate와 CAPA 후보를 연결합니다. 표본이 없거나 부족하면 `NOT_MEASURED`/`INSUFFICIENT_DATA`로 표시하며 실제 정답 없이 임상 성능 저하를 주장하지 않습니다. CRITICAL 변화는 자동 배포가 아니라 QA/RA 검토가 필요한 배포 차단 사유입니다. 자세한 내용은 [Phase 27 설계](docs/phase27-model-monitoring-drift.md)를 참고하세요.
 
+## 안전한 ModelOps 검증·배포
+
+> **Phase 28: PARTIAL / 개발 중.** 아래 설명은 목표 구조를 포함합니다. 현재 실제 검증 실행기는 연결되지 않았으며 검증·재시험·승인·배포 API는 `VALIDATION_RUNNER_NOT_CONFIGURED`로 차단됩니다. 파일 헤더와 SHA-256 확인만으로 모델을 검증 완료 처리하지 않습니다. 관리 화면의 승인·배포·롤백 버튼 연결과 전체 배포·롤백 검증은 미완료입니다. 생명주기 테스트의 승인 흐름은 명시적 테스트 대역을 사용하며 실제 모델 검증 근거가 아닙니다. 최신 안전 차단 테스트 4개 통과; 수정 후 전체 회귀는 아직 재실행하지 않았습니다.
+
+Phase 28은 모델 메타데이터 등록, SHA-256·시그니처 검사, 데이터셋 누수 검사, 버전형 검증 정책, 독립 승인, Release Gate, `LOCAL_DEMO` 배포 계약과 원자적 rollback binding을 연결합니다. 등록자·승인자·배포자를 분리하고 `NOT_MEASURED`를 PASS로 취급하지 않습니다. 외부 추론 서버, 악성코드 검사, 운영 재인증은 `NOT_CONFIGURED`이며 내부 승인은 규제기관 또는 임상 사용 승인이 아닙니다. [Phase 28 상세 설계](docs/phase28-modelops-validation-deployment.md)
+
 ## 공동 개발
 
 `jeongjun7464-sudo`와 `junhaj27-jpg` 모두 동일한 코드베이스에서 브랜치와 Pull Request 방식으로 개발할 수 있습니다. 계정별 로컬 Git 작성자 설정, Collaborator/Fork 방식과 병합 전 검증 절차는 [CONTRIBUTING.md](CONTRIBUTING.md)를 따릅니다. 코드 소유권 리뷰 요청은 [.github/CODEOWNERS](.github/CODEOWNERS)에 두 계정을 등록했습니다.

@@ -1,5 +1,12 @@
 # Changelog
 
+## Phase 28 — ModelOps Validation & Deployment
+
+- Added controlled lifecycle transitions, model artifact metadata and SHA-256/signature validation.
+- Added dataset lineage/leakage checks, versioned validation policies, measured-metric persistence and idempotent validation runs.
+- Enforced registerer/approver/deployer separation, evidence-backed internal approval, Release Gate deployment and integrity-checked rollback.
+- Added MODEL-OPS-001..016 consistency rules, ModelOps UI, migration, tests and repository artifact CI policy.
+
 ## Phase 27 — Model Monitoring & Drift
 
 - Added versioned monitoring snapshots, approved baselines, Jensen–Shannon drift evaluation and unresolved alerts.

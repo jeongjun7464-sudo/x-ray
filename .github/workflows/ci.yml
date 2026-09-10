@@ -10,6 +10,11 @@ jobs:
       - run: pip install -r backend/requirements.txt ruff==0.11.11 pip-audit==2.9.0 cyclonedx-bom==7.1.0
       - run: ruff check backend ml
       - run: PYTHONPATH=backend pytest backend/tests -q --junitxml=backend-junit.xml
+      - run: PYTHONPATH=backend:ml pytest ml/tests -q
+      - run: PYTHONPATH=backend python -m py_compile backend/app/main.py backend/app/phase28_router.py
+      - run: cd backend && DATABASE_URL=sqlite:///phase28-ci.db alembic upgrade head && alembic downgrade 0013_monitoring_drift && alembic upgrade head
+      - run: python scripts/validate_repository_artifacts.py
+      - run: PYTHONPATH=backend pytest backend/tests/test_consistency_engine.py backend/tests/test_phase28_modelops.py -q
       - run: python scripts/generate_validation_docs.py backend-junit.xml validation-summary.md
       - run: cyclonedx-py requirements backend/requirements.txt -o sbom-python.json
       - uses: actions/upload-artifact@v4

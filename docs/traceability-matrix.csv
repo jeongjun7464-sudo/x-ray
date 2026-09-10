@@ -16,3 +16,10 @@ DIF-05,R-PRIV-01,backend/app/main.py,GET /api/active-learning/export.csv,test_re
 DIF-06,R-MODEL-01,backend/app/services/differentiators.py,POST /api/model-comparison,test_model_comparison_is_explicitly_mock,PASS
 DIF-08,R-TEST-01,backend/app/services/synthetic_dicom.py,GET /api/demo/synthetic-dicom,test_synthetic_dicom_and_ood,PASS
 DIF-12,R-PRIV-02,backend/app/main.py,GET /api/predictions/{id}/report.pdf,test_review_update,PASS
+REQ-MOPS-001,R-UNAPPROVED-MODEL,backend/app/phase28_router.py,POST /api/v1/model-releases,test_registration_duplicate_artifact_policy_and_validation_flow,PASS
+REQ-MOPS-002,R-ARTIFACT-TAMPER,backend/app/services/model_artifact_validation.py,POST /api/v1/model-releases/{id}/artifact,test_artifact_and_lineage_safety_services,PASS
+REQ-MOPS-003,R-DATA-LEAKAGE,backend/app/services/dataset_lineage_validation.py,POST /api/v1/model-releases/{id}/validate,test_artifact_and_lineage_safety_services,PASS
+REQ-MOPS-004,R-FABRICATED-PERFORMANCE,backend/app/services/model_validation_runner.py,GET /api/v1/model-validation-runs/{id},test_artifact_and_lineage_safety_services,PASS
+REQ-MOPS-005,R-CONFLICT-OF-DUTY,backend/app/phase28_router.py,POST /api/v1/model-releases/{id}/approve,test_registration_duplicate_artifact_policy_and_validation_flow,PASS
+REQ-MOPS-006,R-UNSAFE-DEPLOYMENT,backend/app/services/model_deployment.py,POST /api/v1/model-releases/{id}/deploy,test_registration_duplicate_artifact_policy_and_validation_flow,PASS
+REQ-MOPS-008,R-CONSISTENCY,backend/app/services/consistency/modelops_checks.py,GET /api/v1/consistency/rules,test_modelops_rules_registered_and_unauthenticated_boundary,PASS

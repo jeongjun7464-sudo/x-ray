@@ -57,6 +57,14 @@ CSV 버전은 `docs/traceability-matrix.csv`이며 테스트 실행 후 결과 �
 | AUTH-REQ-06 | R-CLIENT-TOKEN-LEAK | `api.ts`, `AuthPanel.tsx` | TEST-AUTH-PANEL | PASS |
 | MON-REQ-01 | R-STALE-MONITORING | `MonitoringSnapshot`, `DriftBaseline`, `drift_monitoring.py` | TEST-P27-MON | PASS |
 | MON-REQ-02 | R-UNCONTROLLED-DRIFT | `DriftEvaluation`, `ReleaseBlockDecision`, monitoring gate API | TEST-P27-GATE | PASS |
+| REQ-MOPS-001 | R-UNAPPROVED-MODEL | `phase28_router.py`, `ModelRelease`, `ModelTransitionEvent` | `POST /api/v1/model-releases` | TEST-P28-LIFECYCLE | PASS |
+| REQ-MOPS-002 | R-ARTIFACT-TAMPER | `model_artifact_validation.py`, `ModelArtifact` | `POST /api/v1/model-releases/{id}/artifact` | TEST-P28-ARTIFACT | PASS |
+| REQ-MOPS-003 | R-DATA-LEAKAGE | `dataset_lineage_validation.py` | validation request | TEST-P28-LINEAGE | PASS |
+| REQ-MOPS-004 | R-FABRICATED-PERFORMANCE | `model_validation_runner.py`, validation metric tables | validation run APIs | TEST-P28-NOT-MEASURED | PASS |
+| REQ-MOPS-005 | R-CONFLICT-OF-DUTY | `ModelApproval`, Principal RBAC | approval API | TEST-P28-SEPARATION | PASS |
+| REQ-MOPS-006 | R-UNSAFE-DEPLOYMENT | `model_deployment.py`, `ModelInferenceBinding` | deploy API | TEST-P28-GATE | PASS |
+| REQ-MOPS-007 | R-ROLLBACK-FAILURE | `DeploymentRecord`, binding transaction | rollback API | TEST-P28-ROLLBACK | IMPLEMENTED; integration pending |
+| REQ-MOPS-008 | R-CONSISTENCY | `modelops_checks.py` | consistency rules API | TEST-P28-RULES | PASS |
 | MON-REQ-03 | R-FABRICATED-METRIC | `MonitoringDashboard.tsx`, MON-001..010 | TEST-P27-SAFETY | PASS |
 
 ## Phase 23 책임 있는 AI

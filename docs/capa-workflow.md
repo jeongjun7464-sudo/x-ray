@@ -1,5 +1,7 @@
 # 반복 오류·CAPA 워크플로
 
+ModelOps 배포·rollback 감사 이벤트는 alert 또는 incident에 연결한다. 반복은 CAPA 후보만 만들며 QA/RA 승인과 효과성 확인은 자동화하지 않는다.
+
 Phase 27은 동일 CRITICAL 데이터 드리프트 2회 또는 WARNING 3회 반복 시 `OperationalCapa`를 `CANDIDATE`로만 생성한다. 근본원인, 시정·예방조치, 효과성 확인과 승인·종료는 QA/RA의 명시적 작업이며 자동화하지 않는다.
 
 QA_RA 또는 ADMIN이 오류 발생을 등록한다. 동일 오류 유형이 설정 횟수 이상 누적되면 모델 버전, 데이터셋 버전과 익명 분석 ID를 연결한 `CANDIDATE`를 생성한다.
