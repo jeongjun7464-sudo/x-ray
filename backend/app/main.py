@@ -12,7 +12,7 @@ from app.core.constants import REGIONS
 from app.core.logging import configure_logging
 from app.core.rate_limit import SlidingWindowLimiter
 from app.db.database import Base, SessionLocal, engine, get_db
-from app.db.models import AIRisk, ActiveLearningCandidate, AgentActionProposal, AgentConversation, AgentFeedback, AgentMessage, AgentRetrievalEvent, AgentRun, AnalysisProvenance, AnnotationRecord, AuditEvent, AuditPackage, Capa, ClinicalReview, CodeMapping, ConsistencyEvidence, ConsistencyFindingRecord, ConsistencyResolution, ConsistencyRuleVersion, ConsistencyValidationRun, DatasetVersion, Defect, DefectRecord, DriftBaseline, DriftEvaluation, ErrorOccurrence, ExplanationArtifact, FeatureFlag, FindingPredictionRecord, IntegrationEvent, KnowledgeChunk, KnowledgeDocument, KnowledgeDocumentVersion, KnowledgeIndexRun, LabelTask, LatencyRecord, LineageEvent, LLMInferenceEvent, LongitudinalComparison, MisclassificationReport, ModelDeployment, ModelPerformanceWindow, ModelRegistry, ModelRelease, MonitoringAlert, MonitoringSnapshot, Notification, OperationalCapa, PipelineRun, Prediction, ProtocolDefinition, RecoveryJob, ReleaseBlockDecision, ReviewPriorityRule, RoutingRule, SecurityEvent, Study, StudyAnalysis, StudyInstance, TestEvidence, TestExecution, TestRequirement, TestScenario, UserConsent, XrayAnalysis
+from app.db.models import AIRisk, ActiveLearningCandidate, AgentActionProposal, AgentConversation, AgentFeedback, AgentMessage, AgentRetrievalEvent, AgentRun, AnalysisProvenance, AnnotationRecord, AuditEvent, AuditPackage, Capa, ClinicalReview, CodeMapping, ConsistencyEvidence, ConsistencyFindingRecord, ConsistencyResolution, ConsistencyRuleVersion, ConsistencyValidationRun, DatasetVersion, Defect, DefectRecord, DeploymentRecord, DriftBaseline, DriftEvaluation, ErrorOccurrence, ExplanationArtifact, FeatureFlag, FindingPredictionRecord, IntegrationEvent, KnowledgeChunk, KnowledgeDocument, KnowledgeDocumentVersion, KnowledgeIndexRun, LabelTask, LatencyRecord, LineageEvent, LLMInferenceEvent, LongitudinalComparison, MisclassificationReport, ModelApproval, ModelArtifact, ModelDeployment, ModelInferenceBinding, ModelPerformanceWindow, ModelRegistry, ModelRelease, ModelTransitionEvent, ModelValidationMetric, ModelValidationRun, MonitoringAlert, MonitoringSnapshot, Notification, OperationalCapa, PipelineRun, Prediction, ProtocolDefinition, RecoveryJob, ReleaseBlockDecision, ReviewPriorityRule, RoutingRule, SecurityEvent, Study, StudyAnalysis, StudyInstance, TestEvidence, TestExecution, TestRequirement, TestScenario, UserConsent, ValidationPolicy, XrayAnalysis
 from app.schemas import AgentActionIn, AgentChatIn, AgentFeedbackIn, CodeMappingIn, ConsentIn, IntegratedReviewIn, MisclassificationReportIn, PredictionOut, ProtocolIn, ReviewUpdate, RoutingRuleIn, StudyTagsIn, ValidationOut
 from app.services.dicom_service import metadata_orientation
 from app.services.file_validation import validate_upload
@@ -30,9 +30,14 @@ from app.services.advanced_workflows import DISCLAIMER as RESEARCH_DISCLAIMER, b
 from app.services.operations import DEFAULT_THRESHOLDS, priority_decision, validate_clinical_context
 from app.services.pacs import integration_status
 from app.services.drift_monitoring import evaluate_drift
+from app.services.model_artifact_validation import validate_artifact
+from app.services.dataset_lineage_validation import validate_lineage
+from app.services.model_validation_runner import VALIDATION_TYPES, evaluate_metrics, validation_status
+from app.services.model_deployment import deployment_contract
 from app.core.auth import ALLOWED_ROLES, AuthenticationError, current_principal, extract_bearer_token, issue_session_token, principal_dict, reset_current_principal, set_current_principal, validate_secret, verify_session_token
 from xray_findings import FindingInferenceEngine
 from xray_findings.postprocess import near_threshold
+from app.phase28_router import router as phase28_router
 
 configure_logging()
 logger = logging.getLogger("xray.api")
@@ -1217,3 +1222,5 @@ def confirm_agent_action(proposal_id: str, body: dict, request: Request, x_role:
     elif row.action=="create_report":result={"report_url":f'/api/predictions/{row.arguments.get("prediction_id")}/report.pdf'}
     else:result={"status":"CONFIRMED_FOR_MANUAL_SERVICE","reason":"해당 변경은 추가 업무 검토가 필요하며 Agent가 자동 확정하지 않습니다."}
     row.status="EXECUTED";record_audit(db,action="AGENT_ACTION_CONFIRMED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),after={"action":row.action,"result":result},actor_role=(x_role or row.required_role).upper());db.commit();return {"proposal_id":row.id,"status":row.status,"executed":True,"result":result}
+
+app.include_router(phase28_router)

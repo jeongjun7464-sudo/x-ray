@@ -13,6 +13,10 @@
 | CON-RAG-001 | Citation 정합성 | 인용이 검색 결과에 존재 | 완전 포함 | HIGH | 검토 라우팅 | 규칙 | CONS-23-G | R-HALLUCINATION | TEST-CONS-RAG |
 | CON-LLM-001 | 의미 일치 후보 | sLLM 답변과 근거 | 사람 확인 | MEDIUM | 수동 검토 | LLM 제안 | CONS-29 | R-HALLUCINATION | TEST-CONS-LLM |
 | CON-API-001 | 화면 상태 | REVIEW_REQUIRED를 완료 표시하지 않음 | 상태 일치 | HIGH | 검토 라우팅 | 규칙 | CONS-23-I | R-UI | TEST-CONS-API |
+
+## Phase 28 ModelOps
+
+`MODEL-OPS-001`~`016`은 상태 전이, 해시, 출력 라벨, 전처리, 데이터 누수, 검증 정책·지표·표본, 역할 분리, Release Gate, rollback, 활성 모델 단일성, inference binding, 모델 카드 및 미측정 PASS 방지를 검사한다. CRITICAL 실패는 `RELEASE_BLOCK`과 추론 차단 근거이며 QA_RA·ADMIN 검토가 필요하다.
 | CON-TRACE-001 | 추적성 | 요구사항·위험·시험·결과 | 모든 연결 존재 | HIGH | 자동 승인 차단 | 규칙 | CONS-23-J | R-TRACE | TEST-CONS-TRACE |
 | CON-DEPLOY-001 | 배포 Gate | SHA·데이터·시험·전처리·임계값·승인 | 필수값과 승인 | CRITICAL | 모델 배포 차단 | 규칙 | CONS-23-K | R-DEPLOY | TEST-CONS-DEPLOY |
 | CON-REPORT-001 | 보고서 원본 | analysis ID와 연구용 표시 | 원본과 일치 | HIGH | 재생성 필요 | 규칙 | CONS-23-L | R-REPORT | TEST-CONS-REPORT |

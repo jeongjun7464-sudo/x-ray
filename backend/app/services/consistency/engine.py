@@ -1,6 +1,6 @@
 import uuid
 from .registry import RULES,catalog
-from . import auth_checks,monitoring_checks,dicom_checks,quality_checks,model_checks,review_checks,qdrant_checks,retrieval_checks,llm_checks,api_db_checks,traceability_checks,deployment_checks,report_checks,security_checks
+from . import auth_checks,monitoring_checks,modelops_checks,dicom_checks,quality_checks,model_checks,review_checks,qdrant_checks,retrieval_checks,llm_checks,api_db_checks,traceability_checks,deployment_checks,report_checks,security_checks
 class ConsistencyEngine:
     version="1.0"
     def validate(self,context,categories=None):
