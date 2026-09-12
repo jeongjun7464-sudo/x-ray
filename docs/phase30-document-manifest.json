@@ -1,0 +1,15 @@
+{
+  "status": "DRAFT",
+  "normalization": "UTF-8 without BOM; CRLF normalized to LF",
+  "files": [
+    {"file": "audit-trail-integrity.md", "sha256": "af43341f34a90e0831c3dffc11e8fc23ab2eb737e523de5051d448b2ec42dede"},
+    {"file": "change-control-procedure.md", "sha256": "05161a3d48fe21b35eb73684f675fdc39fbd2aca2a2911fe87299fc9b0f3fb75"},
+    {"file": "document-control-procedure.md", "sha256": "800d498fb28f60d5e32011bbb7ff071141c911676d4c0fdfe50004691e49f560"},
+    {"file": "electronic-approval-policy.md", "sha256": "fa6b7b9a92eabfb4e484a92d2d4130f0c1d6b711fc679650b40a9ca3784952c3"},
+    {"file": "phase30-qms-regulatory-traceability.md", "sha256": "7d30474ee401ec10238d53f89984847525555318288dea7cd937ace490f3ed61"},
+    {"file": "risk-management-plan.md", "sha256": "2a0e3d0590a924c451de83ee6321753d25d5d6c84bc5c89e879514a8b1b93bec"},
+    {"file": "risk-management-report.md", "sha256": "a1fb742c05b0ee3fdf42902ee6b50d38a4c9a1f304dff79d4aff59a5927fcb6d"},
+    {"file": "software-development-plan.md", "sha256": "ae0ed549c791e9f2fcc37fb550d1c006f8bdc967703cb698474327f0651be882"},
+    {"file": "software-requirements-specification.md", "sha256": "73c8935f3535738eaa3cbb4828192a783a4c6096227cf2d2af72ee8d465c932d"}
+  ]
+}

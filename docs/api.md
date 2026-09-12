@@ -1,5 +1,9 @@
 # API
 
+## Phase 30 QMS API
+
+`/api/v1/qms` 아래 requirements, risks/risk-matrix, traceability-links/traceability/gaps/orphans/traceability-export, change-requests, capas, documents, approvals, audit-chain, audit-packages, consistency/validate, dashboard, tests, defects를 제공한다. 실제 method/path와 strict 입력 스키마는 FastAPI `/openapi.json`에 등록되어 있다. 중요 승인 응답은 REAUTHENTICATION_NOT_CONFIGURED이며 승인 성공으로 처리하면 안 된다.
+
 OpenAPI UI는 `/docs`, 스키마는 `/openapi.json`에서 제공한다.
 
 ## Phase 28 ModelOps

@@ -2,6 +2,9 @@ from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
+    qms_sllm_enabled: bool = False
+    qms_risk_high_score: int = 10
+    qms_risk_critical_score: int = 20
     environment: str = "development"
     debug: bool = False
     app_name: str = "X-Ray Anatomical Region Classification & Routing System"
@@ -14,6 +17,34 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = 60
     cors_origins: str = "http://localhost:5173"
     dummy_mode: bool = True
+    pacs_provider: str = "none"
+    pacs_enabled: bool = False
+    orthanc_base_url: str = ""
+    orthanc_username: str = ""
+    orthanc_password: str = ""
+    orthanc_timeout_seconds: int = 10
+    orthanc_verify_tls: bool = True
+    dicomweb_base_url: str = ""
+    dicomweb_qido_path: str = "/studies"
+    dicomweb_wado_path: str = "/studies"
+    dicomweb_stow_path: str = "/studies"
+    dicomweb_token: str = ""
+    dicomweb_timeout_seconds: int = 15
+    dicomweb_verify_tls: bool = True
+    fhir_enabled: bool = False
+    fhir_base_url: str = ""
+    fhir_token: str = ""
+    fhir_timeout_seconds: int = 15
+    fhir_verify_tls: bool = True
+    external_transmission_enabled: bool = False
+    external_transmission_allow_demo: bool = False
+    external_max_retries: int = 3
+    external_retry_base_seconds: int = 2
+    integration_store_raw_uids: bool = False
+    integration_audit_enabled: bool = True
+    integration_principal_institutions: dict[str, str] = {}
+    integration_resource_institutions: dict[str, str] = {}
+    integration_connection_institution_id: str = ""
     model_version: str = "dummy-v1"
     code_version: str = "0.3.0"
     retention_days: int | None = None

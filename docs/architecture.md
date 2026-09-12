@@ -1,5 +1,9 @@
 # Architecture
 
+## Phase 30 QMS 확장
+
+기존 레코드 → QMS service/router → 규칙 기반 정합성 검사 → 독립 검토 게이트로 연결한다. 생성 전용 LangGraph와 검증 모듈은 분리되어 있고 생성기에 승인·배포 도구를 제공하지 않는다. ControlledDocumentVersion과 AuditChainEntry는 일반 ORM 변경을 거부한다. [세부 범위](phase30-qms-regulatory-traceability.md).
+
 Phase 28은 모델 등록과 단일 활성 추론 binding 사이에 검증·독립 승인·Release Gate 계층을 둔다. 상세 설계는 `phase28-modelops-validation-deployment.md`에 있다.
 
 운영 계층에는 `MonitoringSnapshot → DriftBaseline/DriftEvaluation → MonitoringAlert → ReleaseBlockDecision/OperationalCapa` 흐름이 추가된다. 모든 레코드는 모델·데이터 버전과 익명 기관 구분만 저장하며 환자 식별정보를 저장하지 않는다.

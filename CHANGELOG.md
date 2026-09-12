@@ -1,5 +1,9 @@
 # Changelog
 
+## Phase 30 — QMS (unreleased / partial)
+
+기존 시험 요구사항·위험·CAPA·결함 모델을 확장하고 0016_qms migration, QMS API·React 화면·문서 버전·양방향 추적성·감사 체인·패키지 해시 검사를 추가했습니다. 중요 전자승인은 fail-closed이며 실제 운영 승인·기관 연동은 검증되지 않았습니다. Phase 29와 함께 개발 브랜치에서 관리하며 main에 병합하지 않았습니다.
+
 ## Phase 28 — ModelOps Validation & Deployment
 
 - Added controlled lifecycle transitions, model artifact metadata and SHA-256/signature validation.

@@ -171,6 +171,8 @@ def reject(release_id:str,body:dict,request:Request,x_role:str|None=Header(None,
 @router.post("/model-releases/{release_id}/deploy")
 def deploy(release_id:str,body:dict,request:Request,x_role:str|None=Header(None,alias="X-Role"),x_actor:str|None=Header(None,alias="X-Actor"),db:Session=Depends(get_db)):
     actor(x_role,x_actor,{"ADMIN"})
+    from app.qms.workflows import release_gate
+    release_gate(db,release_id)
     require_validation_adapter()
     role,subject=actor(x_role,x_actor,{"ADMIN"});row=db.get(ModelRelease,release_id)
     if not row:raise HTTPException(404,detail={"code":"MODEL_RELEASE_NOT_FOUND"})

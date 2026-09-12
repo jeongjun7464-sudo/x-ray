@@ -1,5 +1,9 @@
 # X-Ray Anatomical Region Classification & Routing System
 
+## Phase 30 — QMS 개발 상태
+
+QMS 관리센터와 `/api/v1/qms` API가 연결되었습니다. 요구사항·위험·문서 버전·변경 영향평가·CAPA·추적성·감사 체인을 연구용으로 관리합니다. **PARTIAL**: 중요 승인은 재인증 미설정으로 차단하며, 패키지는 메타데이터 중심 INCOMPLETE_DRAFT입니다. 규제 인증이나 법적 전자서명 적합성을 주장하지 않습니다. [구현·시험·제한사항](docs/phase30-qms-regulatory-traceability.md)을 확인하세요. 아래 이전 단계의 시험 수치는 해당 단계 당시 기록입니다.
+
 > X-ray 영상 분석, sLLM 업무지원, Qdrant 지식검색 결과를 하나의 정합성 검증 에이전트가 파트별로 검사하고, 검증 결과를 통합하여 의료진 검토·품질관리·모델 배포 판단을 지원하는 시스템입니다.
 
 영상 AI, 언어모델, 검색 결과와 운영 기록 사이의 누락·충돌을 추적하는 연구·교육용 플랫폼입니다. 정합성 검증 에이전트는 의료진의 진단이나 최종 판단을 대체하지 않으며, 검증 불가능한 항목은 통과로 처리하지 않습니다.
@@ -47,6 +51,8 @@ flowchart LR
 Phase 27은 익명 집계 스냅샷, 승인 기준선, Jensen–Shannon/비율 변화 평가, 경고 처리, Release Gate와 CAPA 후보를 연결합니다. 표본이 없거나 부족하면 `NOT_MEASURED`/`INSUFFICIENT_DATA`로 표시하며 실제 정답 없이 임상 성능 저하를 주장하지 않습니다. CRITICAL 변화는 자동 배포가 아니라 QA/RA 검토가 필요한 배포 차단 사유입니다. 자세한 내용은 [Phase 27 설계](docs/phase27-model-monitoring-drift.md)를 참고하세요.
 
 ## 안전한 ModelOps 검증·배포
+
+Phase 29 의료기관 연동은 별도 브랜치에서 개발 중입니다. HTTP 어댑터·태그 비식별화·FHIR 로컬 검사, 기관 매핑 기반 API 접근, 전송 제안·확인 차단·감사 저장, DB 마이그레이션과 연동센터 UI를 연결했습니다. 실제 전송 워커·전체 FHIR 검증·hash 기반 import는 미완료이며 실제 병원 연결은 `NOT_CONFIGURED`입니다. [Phase 29 실제 구현 범위](docs/phase29-pacs-dicomweb-fhir.md)
 
 > **Phase 28: PARTIAL / 개발 중.** 아래 설명은 목표 구조를 포함합니다. 현재 실제 검증 실행기는 연결되지 않았으며 검증·재시험·승인·배포 API는 `VALIDATION_RUNNER_NOT_CONFIGURED`로 차단됩니다. 파일 헤더와 SHA-256 확인만으로 모델을 검증 완료 처리하지 않습니다. 관리 화면의 승인·배포·롤백 버튼 연결과 전체 배포·롤백 검증은 미완료입니다. 생명주기 테스트의 승인 흐름은 명시적 테스트 대역을 사용하며 실제 모델 검증 근거가 아닙니다. 최신 안전 차단 테스트 4개 통과; 수정 후 전체 회귀는 아직 재실행하지 않았습니다.
 

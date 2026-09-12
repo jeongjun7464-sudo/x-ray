@@ -23,3 +23,13 @@ REQ-MOPS-004,R-FABRICATED-PERFORMANCE,backend/app/services/model_validation_runn
 REQ-MOPS-005,R-CONFLICT-OF-DUTY,backend/app/phase28_router.py,POST /api/v1/model-releases/{id}/approve,test_registration_duplicate_artifact_policy_and_validation_flow,PASS
 REQ-MOPS-006,R-UNSAFE-DEPLOYMENT,backend/app/services/model_deployment.py,POST /api/v1/model-releases/{id}/deploy,test_registration_duplicate_artifact_policy_and_validation_flow,PASS
 REQ-MOPS-008,R-CONSISTENCY,backend/app/services/consistency/modelops_checks.py,GET /api/v1/consistency/rules,test_modelops_rules_registered_and_unauthenticated_boundary,PASS
+REQ-QMS-01,R-ROLE-FORGERY,backend/app/qms/router.py,POST /api/v1/qms/requirements,test_requirements_rbac_duplicates_gaps_and_ambiguity,PASS
+REQ-QMS-02,R-QMS-APPROVAL,backend/app/services/electronic_approval.py,POST /api/v1/qms/documents/{id}/approve,test_document_versions_review_reauthentication_and_tampering,PASS_BLOCKING_ONLY
+REQ-QMS-03,R-QMS-TRACE,backend/app/qms/router.py,GET /api/v1/qms/traceability/orphans,test_traceability_both_directions_versions_and_orphans,PASS
+REQ-QMS-04,R-QMS-INTEGRITY,backend/app/services/qms_integrity.py,POST /api/v1/qms/audit-chain/verify,test_audit_chain_detects_mutation_and_missing_event,PASS
+REQ-QMS-05,R-QMS-HALLUCINATION,backend/app/services/qms_agent.py,POST /api/v1/qms/documents/generate,test_qms_generator_rejects_unsupported_citations,PASS_MOCK_ONLY
+REQ-QMS-06,R-QMS-PRIVACY,backend/app/services/qms_validation.py,POST /api/v1/qms/documents/{id}/new-version,test_qms_unsafe_draft_content_blocked,PASS_HEURISTIC_ONLY
+REQ-QMS-CAPA,R-QMS-CAPA-BYPASS,backend/app/qms/workflows.py,POST /api/v1/qms/capas/{id}/close,test_capa_not_closed_by_legacy_route,PASS_BLOCKING_ONLY
+REQ-QMS-PACKAGE,R-QMS-EVIDENCE,backend/app/qms/packages.py,GET /api/v1/qms/audit-packages/{id}/download,test_draft_package_integrity_and_legacy_access_block,PASS_DRAFT_ONLY
+REQ-QMS-UI,R-QMS-USABILITY,frontend/src/QmsCenter.tsx,QMS management center,QmsCenter.test.tsx,PASS_JSDOM_ONLY
+REQ-QMS-PRODUCTION,R-QMS-RELEASE,docs/phase30-qms-regulatory-traceability.md,production approvals,external_reauthentication_and_real_integration,NOT_VERIFIED

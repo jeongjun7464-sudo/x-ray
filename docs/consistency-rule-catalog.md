@@ -1,5 +1,9 @@
 # 정합성 검증 규칙 카탈로그
 
+## QMS-001~020
+
+QMS 규칙은 `services/consistency/qms_checks.py`, DB 증거 수집은 `qms/validation.py`에 있다. 자료가 없는 규칙은 NOT_VERIFIABLE이다. 인용 존재, 시험 연결, 문서 문구 검사 등의 PASS를 임상 성능이나 규제 적합성 PASS로 해석하지 않는다. CRITICAL 실패는 보호 작업 차단과 SecurityEvent에 연결한다.
+
 모든 결과는 규칙 버전과 근거를 저장한다. `NOT_VERIFIABLE`은 PASS가 아니며 LLM 보조 검사는 자동 PASS가 아닌 `LLM_SUGGESTED_FINDING`으로 사람에게 전달한다.
 
 | 규칙 ID | 규칙명 | 검증 대상·조건 | 예상 결과 | 심각도 | 실패 시 조치 | 자동화 | 요구사항 | 위험 | 시험 |

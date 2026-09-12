@@ -3,6 +3,8 @@ from datetime import datetime, timezone
 from sqlalchemy import Boolean, DateTime, Float, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db.database import Base
+from app.db import qms_models
+from app.db.integration_models import InstitutionConnection, ExternalTransferJob, ExternalTransferEvent, DicomUidMapping, FhirExportRecord
 
 class Prediction(Base):
     __tablename__ = "predictions"
@@ -252,6 +254,7 @@ class MisclassificationReport(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 class AIRisk(Base):
+    qms_data: Mapped[dict] = mapped_column(JSON, default=dict, server_default='{}')
     __tablename__ = "ai_risks"
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     name: Mapped[str] = mapped_column(String(120))
@@ -409,6 +412,7 @@ class ValidationPolicy(Base):
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()));policy_id: Mapped[str]=mapped_column(String(64),index=True);version: Mapped[str]=mapped_column(String(32));target_region: Mapped[str|None]=mapped_column(String(64),nullable=True);target_finding: Mapped[str|None]=mapped_column(String(64),nullable=True);metric_thresholds: Mapped[dict]=mapped_column(JSON,default=dict);minimum_sample_size: Mapped[int]=mapped_column(Integer,default=30);robustness_thresholds: Mapped[dict]=mapped_column(JSON,default=dict);fairness_thresholds: Mapped[dict]=mapped_column(JSON,default=dict);latency_thresholds: Mapped[dict]=mapped_column(JSON,default=dict);active: Mapped[bool]=mapped_column(Boolean,default=False);created_by: Mapped[str]=mapped_column(String(64));approved_by: Mapped[str|None]=mapped_column(String(64),nullable=True);approved_at: Mapped[datetime|None]=mapped_column(DateTime(timezone=True),nullable=True);created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=lambda:datetime.now(timezone.utc))
 
 class OperationalCapa(Base):
+    qms_data: Mapped[dict] = mapped_column(JSON, default=dict, server_default='{}')
     __tablename__="operational_capas"
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()))
     error_type: Mapped[str]=mapped_column(String(64),index=True)
@@ -444,6 +448,7 @@ class AnalysisProvenance(Base):
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=lambda:datetime.now(timezone.utc))
 
 class TestRequirement(Base):
+    qms_data: Mapped[dict] = mapped_column(JSON, default=dict, server_default='{}')
     __tablename__="test_requirements"
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()));requirement_id: Mapped[str]=mapped_column(String(64),unique=True,index=True);risk_ids: Mapped[list]=mapped_column(JSON,default=list);title: Mapped[str]=mapped_column(String(200))
 class TestScenario(Base):
@@ -456,6 +461,7 @@ class TestEvidence(Base):
     __tablename__="test_evidence"
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()));execution_id: Mapped[str]=mapped_column(String(36),index=True);filename: Mapped[str]=mapped_column(String(200));sha256: Mapped[str]=mapped_column(String(64));storage_status: Mapped[str]=mapped_column(String(32),default="METADATA_ONLY")
 class DefectRecord(Base):
+    qms_data: Mapped[dict] = mapped_column(JSON, default=dict, server_default='{}')
     __tablename__="defect_records"
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()));execution_id: Mapped[str]=mapped_column(String(36),index=True);summary: Mapped[str]=mapped_column(String(300));status: Mapped[str]=mapped_column(String(32),default="OPEN")
 

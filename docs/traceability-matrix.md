@@ -1,5 +1,9 @@
 # 추적성 매트릭스
 
+## Phase 30 추적성
+
+QMS DB에는 source/target 타입·ID·버전·코드 해시를 저장하고 양방향으로 조회한다. 존재하지 않는 대상은 등록 거부하며 사후 삭제·버전/콘텐츠 변경은 orphan/mismatch로 탐지한다. `/api/v1/qms/traceability-export`로 현재 링크의 CSV를 받는다. 기존 표의 PASS는 이전 실행 기록이며 Phase 30 전체 완료를 뜻하지 않는다.
+
 | 요구사항 ID | 위험 ID | 구현 파일 | API | 테스트 ID | 최근 결과 |
 |---|---|---|---|---|---|
 | DIF-01 자동 라우팅 | R-ROUTE-01 | `services/differentiators.py` | `POST /api/predictions` | `test_synthetic_dicom_and_ood` | PASS |
