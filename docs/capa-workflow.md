@@ -1,5 +1,9 @@
 # 반복 오류·CAPA 워크플로
 
+## QMS CAPA 경로
+
+`/api/v1/qms/capas`는 기존 OperationalCapa와 Capa를 통합 조회한다. QMS 생성 레코드는 기존 PATCH /api/v1/capa로 변경할 수 없다. 원인·조치·효과성 순서와 역할 분리를 검사하고 종료에는 재인증을 요구하므로 현재 자동 종료는 불가능하다.
+
 ModelOps 배포·rollback 감사 이벤트는 alert 또는 incident에 연결한다. 반복은 CAPA 후보만 만들며 QA/RA 승인과 효과성 확인은 자동화하지 않는다.
 
 Phase 27은 동일 CRITICAL 데이터 드리프트 2회 또는 WARNING 3회 반복 시 `OperationalCapa`를 `CANDIDATE`로만 생성한다. 근본원인, 시정·예방조치, 효과성 확인과 승인·종료는 QA/RA의 명시적 작업이며 자동화하지 않는다.

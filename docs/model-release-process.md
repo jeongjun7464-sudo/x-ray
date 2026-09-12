@@ -1,5 +1,9 @@
 # Model Release Gate
 
+## QMS 배포 통제
+
+QMS에 연결된 미완료 변경, HIGH/CRITICAL CAPA, 미해결 CRITICAL 위험과 감사 무결성 실패는 추가 Release Gate에서 차단한다. Phase 28 검증 실행기 부재 차단은 유지된다. 레거시 승인 경로 전체의 전자승인 전환이 완료되었다고 표현하지 않는다.
+
 Phase 28은 아티팩트·데이터 계보·승인 정책·독립 QA/RA 승인·Release Gate·rollback 대상을 모두 요구하며 승인만으로 자동 배포하지 않는다.
 
 승인 상태만으로 배포할 수 없다. `POST /api/v1/releases/{release_id}/monitoring-gate`가 최신 모니터링 증적, CRITICAL 드리프트, 모델 해시, 검증 데이터셋 버전과 최근 정합성 실패를 확인한다. `blocked=true`이면 릴리스는 중단되며 결과가 자동 승인이나 자동 배포를 수행하지 않는다.

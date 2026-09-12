@@ -472,6 +472,7 @@ def get_audit_package(package_id:str,db:Session=Depends(get_db)):
     from app.services.verification import decode
     row=db.get(AuditPackage,package_id)
     if not row:raise HTTPException(404,"감사 패키지를 찾을 수 없습니다.")
+    if row.manifest.get('qms'):raise HTTPException(403,'Use authenticated QMS package API')
     valid=file_digest(decode(row.payload_base64))==row.package_sha256;return {"package_id":row.id,"status":row.status if valid else "INTEGRITY_FAILED","integrity_valid":valid,"package_sha256":row.package_sha256,"manifest":row.manifest}
 
 @app.get("/api/v1/audit-packages/{package_id}/download")
@@ -479,6 +480,7 @@ def download_audit_package(package_id:str,db:Session=Depends(get_db)):
     from app.services.verification import decode
     row=db.get(AuditPackage,package_id)
     if not row:raise HTTPException(404,"감사 패키지를 찾을 수 없습니다.")
+    if row.manifest.get('qms'):raise HTTPException(403,'Use authenticated QMS package API')
     payload=decode(row.payload_base64)
     if file_digest(payload)!=row.package_sha256:raise HTTPException(409,"INTEGRITY_FAILED: 생성 후 패키지 내용이 변경되었습니다.")
     return Response(payload,media_type="application/zip",headers={"Content-Disposition":f"attachment; filename=audit-package-{row.id}.zip"})
@@ -586,7 +588,10 @@ def approve_model_release(model_id:str,body:dict,request:Request,x_role:str|None
 
 @app.post("/api/v1/models/{model_id}/deploy")
 def deploy_model_release(model_id:str,request:Request,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
-    role=require_role(x_role,{"ADMIN"});row=db.get(ModelRelease,model_id)
+    role=require_role(x_role,{"ADMIN"})
+    from app.qms.workflows import release_gate
+    release_gate(db,model_id)
+    row=db.get(ModelRelease,model_id)
     if not row:raise HTTPException(404,"모델을 찾을 수 없습니다.")
     if row.status!="APPROVED":raise HTTPException(409,"승인되지 않은 모델은 추론 엔진에 배포할 수 없습니다.")
     for active in db.scalars(select(ModelRelease).where(ModelRelease.status=="DEPLOYED")).all():active.status="RETIRED"
@@ -625,6 +630,7 @@ def create_operational_capa(body:dict,request:Request,x_role:str|None=Header(def
 def update_operational_capa(capa_id:str,body:dict,request:Request,x_role:str|None=Header(default=None,alias="X-Role"),db:Session=Depends(get_db)):
     role=require_role(x_role,{"QA_RA","ADMIN"});row=db.get(OperationalCapa,capa_id)
     if not row:raise HTTPException(404,"CAPA를 찾을 수 없습니다.")
+    if row.qms_data.get('qms_managed'):raise HTTPException(409,'QMS_MANAGED_USE_QMS_WORKFLOW')
     for field in ("root_cause","corrective_action","preventive_action","owner","due_date","effectiveness_check"):
         if field in body:setattr(row,field,body[field])
     if body.get("status"):
@@ -1224,3 +1230,8 @@ def confirm_agent_action(proposal_id: str, body: dict, request: Request, x_role:
     row.status="EXECUTED";record_audit(db,action="AGENT_ACTION_CONFIRMED",target_id=row.id,request_id=request.headers.get("X-Request-ID","generated"),after={"action":row.action,"result":result},actor_role=(x_role or row.required_role).upper());db.commit();return {"proposal_id":row.id,"status":row.status,"executed":True,"result":result}
 
 app.include_router(phase28_router)
+from app.integrations.router import router as integration_router
+app.include_router(integration_router)
+from app.qms.router import router as qms_router
+from app.qms import workflows, validation, packages
+app.include_router(qms_router)
